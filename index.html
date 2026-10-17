@@ -4,15 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#101716" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="description" content="English Tutor — 부담 없이 시작하는 나만의 영어회화 연습 공간" />
     <title>English Tutor</title>
-    <link rel="stylesheet" href="./style.css" />
-    <script src="./app.js" defer></script>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <header class="app-header">
-        <a class="brand" href="./index.html" aria-label="English Tutor 홈">
+        <a class="brand" href="/" aria-label="English Tutor 홈">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path d="M5 10v4m4-8v12m4-15v18m4-15v12m4-8v4" />
@@ -20,7 +21,13 @@
           </span>
           <span class="brand-name" lang="en">English Tutor<span class="brand-dot">.</span></span>
         </a>
-        <span class="preview-badge"><span aria-hidden="true"></span>화면 미리보기</span>
+        <div class="header-actions">
+          <span class="preview-badge"><span aria-hidden="true"></span>영어회화 연습</span>
+          <form class="logout-form" action="/logout" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="logout-button" type="submit">로그아웃</button>
+          </form>
+        </div>
       </header>
 
       <main>
@@ -59,20 +66,22 @@
 
               <p class="ready-label" lang="en">A little practice goes a long way.</p>
 
-              <div class="ai-message">
-                <span class="ai-avatar" aria-hidden="true">AI</span>
-                <div class="message-content">
-                  <p class="message-author" lang="en">English Tutor <span lang="ko">미리보기 대화</span></p>
-                  <div class="message-bubble" lang="en">
-                    <p>Hi there! I'm your English tutor.</p>
-                    <p>How has your day been?</p>
+              <div class="chat-messages" id="chat-messages" role="log" aria-label="영어 대화" aria-live="polite" aria-relevant="additions" tabindex="0">
+                <div class="ai-message">
+                  <span class="ai-avatar" aria-hidden="true">AI</span>
+                  <div class="message-content">
+                    <p class="message-author" lang="en">English Tutor <span lang="ko">첫 인사</span></p>
+                    <div class="message-bubble" lang="en">
+                      <p>Hi there! I'm your English tutor.</p>
+                      <p>How has your day been?</p>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
             <div class="conversation-controls">
-              <button class="start-button" id="start-conversation" type="button" aria-describedby="preview-note">
+              <button class="start-button" id="start-conversation" type="button" aria-describedby="conversation-note" aria-controls="chat-form">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <rect x="9" y="3" width="6" height="11" rx="3" />
                   <path d="M6 10v1a6 6 0 0 0 12 0v-1m-6 7v4m-3 0h6" />
@@ -82,9 +91,17 @@
                   <path d="M5 12h14m-5-5 5 5-5 5" />
                 </svg>
               </button>
-              <p class="preview-note" id="preview-note">지금은 화면 미리보기 단계예요. 음성은 녹음되지 않아요.</p>
-              <!-- 같은 영역의 내용만 바꿔서 반복 클릭해도 안내가 쌓이지 않습니다. -->
+              <form class="chat-form" id="chat-form" hidden>
+                <label class="input-label" for="message-input">영어로 한마디 건네 보세요.</label>
+                <div class="message-composer">
+                  <textarea id="message-input" name="message" rows="2" placeholder="Tell me about your day..." aria-describedby="message-hint" autocomplete="off" spellcheck="true" lang="en" required></textarea>
+                  <button class="send-button" id="send-message" type="submit" disabled lang="en">Send</button>
+                </div>
+                <p class="message-hint" id="message-hint">최대 500자 · Enter로 전송, Shift + Enter로 줄바꿈</p>
+              </form>
+              <p class="preview-note" id="conversation-note">Start Conversation을 누르고 영어 문장을 입력해 보세요. 텍스트로 대화해요.</p>
               <p class="connection-notice" id="connection-notice" role="status" aria-live="polite" aria-atomic="true"></p>
+              <noscript><p class="preview-note">대화하려면 브라우저에서 JavaScript를 켜 주세요.</p></noscript>
             </div>
           </section>
 

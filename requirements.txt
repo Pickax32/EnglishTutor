@@ -1,0 +1,6 @@
+openai
+Flask
+Flask-Limiter
+httpx
+gunicorn
+redis

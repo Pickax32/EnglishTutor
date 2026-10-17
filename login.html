@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101716" />
+    <meta name="description" content="English Tutor에 로그인하고 영어회화를 연습하세요." />
+    <title>로그인 | English Tutor</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <a class="brand" href="/login" aria-label="English Tutor 로그인">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M5 10v4m4-8v12m4-15v18m4-15v12m4-8v4" />
+            </svg>
+          </span>
+          <span class="brand-name" lang="en">English Tutor<span class="brand-dot">.</span></span>
+        </a>
+        <span class="preview-badge"><span aria-hidden="true"></span>영어회화 연습</span>
+      </header>
+
+      <main class="login-main">
+        <section class="login-panel" aria-labelledby="login-title">
+          <p class="eyebrow" lang="en">YOUR SPACE TO SPEAK</p>
+          <h1 id="login-title" lang="en">Welcome<br /><span>back.</span></h1>
+          <p class="login-description">비밀번호를 입력하고<br />나만의 영어회화를 시작하세요.</p>
+
+          <form class="login-form" action="/login" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <label class="input-label" for="password">비밀번호</label>
+            <input class="password-input" id="password" name="password" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" required />
+            {% if error %}
+            <p class="login-error" role="alert">{{ error }}</p>
+            {% endif %}
+            <button class="login-button" type="submit">로그인</button>
+          </form>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        <p lang="en">A little every day makes a difference.</p>
+        <span lang="en">English Tutor</span>
+      </footer>
+    </div>
+  </body>
+</html>
