@@ -68,6 +68,7 @@ function appendMessage(role, text) {
   bubble.append(messageText);
 
   content.append(author, bubble);
+  if (role === "assistant") addAnswerSpeechControls(content, text);
   message.append(content);
   chatMessages.append(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -140,6 +141,7 @@ async function testMicrophone() {
     return;
   }
 
+  if (!stopAnswerSpeech("마이크 확인을 위해 답변 읽기를 멈췄어요.")) return;
   // 권한 요청 중에는 중복 클릭을 막습니다. 텍스트 채팅 상태와는 별개입니다.
   microphoneTestInFlight = true;
   microphoneTestButton.disabled = true;
@@ -209,6 +211,7 @@ function updateRecordingControls() {
   recordingControls.classList.toggle("is-recording", activeRecording?.phase === "recording");
   recordingControls.setAttribute("aria-busy", String(busy && activeRecording.phase !== "recording"));
   updateTranscriptionUseButton();
+  updateSpeechButtons();
 }
 
 function releaseRecordingTracks(session) {
@@ -343,6 +346,7 @@ async function startLocalRecording() {
     return;
   }
 
+  if (!stopAnswerSpeech("녹음을 시작하기 위해 답변 읽기를 멈췄어요.")) return;
   releaseRecordingPlayback();
   recordingTime.textContent = "0 / 15초";
   const session = {
@@ -404,6 +408,7 @@ function clearLocalRecording(message = "녹음을 지웠습니다. 다시 녹음
 
 async function playLocalRecording() {
   if (activeRecording || !recordingObjectUrl) return;
+  if (!stopAnswerSpeech("녹음 재생을 위해 답변 읽기를 멈췄어요.")) return;
   const request = ++playbackRequest;
   try {
     recordingAudio.currentTime = 0;
@@ -412,6 +417,182 @@ async function playLocalRecording() {
     if (request === playbackRequest && recordingObjectUrl) {
       showRecordingStatus("녹음을 재생하지 못했습니다. 녹음 재생을 다시 누르거나 새로 녹음해 주세요.", true);
     }
+  }
+}
+
+// STEP 3-5A: AI 답변만 브라우저 음성으로 읽습니다. 재생은 클릭으로만 시작합니다.
+const speechStatus = document.querySelector("#speech-status");
+const speechSynth = window.speechSynthesis;
+const speechSupported = Boolean(speechSynth
+  && typeof speechSynth.speak === "function"
+  && typeof speechSynth.cancel === "function"
+  && typeof SpeechSynthesisUtterance === "function");
+const speechEntries = new WeakMap();
+let speechVoices = [];
+let activeSpeech = null;
+let speechCancelPending = false;
+
+function showSpeechStatus(message, isError = false) {
+  speechStatus.textContent = message;
+  speechStatus.classList.toggle("is-error", isError);
+}
+
+function refreshSpeechVoices() {
+  try {
+    speechVoices = speechSupported && typeof speechSynth.getVoices === "function"
+      ? Array.from(speechSynth.getVoices()) : [];
+  } catch {
+    // 목록을 얻지 못해도 en-US의 브라우저 기본 음성으로 시도합니다.
+    speechVoices = [];
+  }
+}
+
+function chooseEnglishVoice() {
+  refreshSpeechVoices();
+  const language = (voice) => String(voice.lang ?? "").replace(/_/g, "-").toLowerCase();
+  const english = speechVoices.filter((voice) => /^en(?:-|$)/.test(language(voice)));
+  const american = english.filter((voice) => language(voice) === "en-us");
+  const preferred = (voices) => voices.find((voice) => voice.default)
+    || voices.find((voice) => voice.localService) || voices[0];
+  return preferred(american) || preferred(english) || null;
+}
+
+function updateSpeechButtons() {
+  const microphoneBusy = activeRecording !== null || microphoneTestInFlight;
+  chatMessages.querySelectorAll(".ai-message .message-content").forEach((content) => {
+    const entry = speechEntries.get(content);
+    if (!entry) return;
+    const reading = activeSpeech?.entry === entry;
+    entry.playButton.disabled = !speechSupported || microphoneBusy || reading;
+    entry.playButton.textContent = reading ? "읽는 중..." : "답변 듣기";
+    entry.playButton.setAttribute("aria-pressed", String(reading));
+    entry.stopButton.disabled = !reading;
+    entry.controls.classList.toggle("is-speaking", reading);
+  });
+}
+
+function detachSpeechEvents(session) {
+  session.utterance.onstart = null;
+  session.utterance.onend = null;
+  session.utterance.onerror = null;
+}
+
+function finishAnswerSpeech(session, message, isError = false) {
+  if (activeSpeech !== session) return;
+  activeSpeech = null;
+  detachSpeechEvents(session);
+  updateSpeechButtons();
+  showSpeechStatus(message, isError);
+}
+
+function stopAnswerSpeech(message = "", cancelQueued = false) {
+  const previous = activeSpeech;
+  // cancel()이 즉시 종료 이벤트를 보내도 이전 발화가 새 상태를 건드리지 못합니다.
+  activeSpeech = null;
+  if (previous) detachSpeechEvents(previous);
+  updateSpeechButtons();
+  if (!speechSupported || (!previous && !cancelQueued && !speechCancelPending)) return true;
+  try {
+    speechSynth.cancel();
+    speechCancelPending = false;
+  } catch {
+    speechCancelPending = true;
+    showSpeechStatus("음성 읽기를 멈추지 못했어요. 페이지를 새로고침한 뒤 다시 시도해 주세요.", true);
+    return false;
+  }
+  if (previous && message) showSpeechStatus(message);
+  return true;
+}
+
+function speakAnswer(entry) {
+  if (!speechSupported) {
+    showSpeechStatus("이 브라우저는 답변 읽기를 지원하지 않아요. 다른 브라우저에서 시도해 주세요.", true);
+    return;
+  }
+  if (activeRecording || microphoneTestInFlight) {
+    showSpeechStatus("녹음이나 마이크 확인이 끝난 뒤 답변 듣기를 눌러 주세요.", true);
+    return;
+  }
+  if (document.visibilityState === "hidden" || entry.controls.isConnected === false) return;
+  if (!stopAnswerSpeech("", true)) return;
+  let session = null;
+  try {
+    // 저장된 녹음은 유지하고 재생만 멈춰 두 음성이 겹치지 않게 합니다.
+    playbackRequest += 1;
+    recordingAudio.pause();
+    const utterance = new SpeechSynthesisUtterance(entry.text);
+    utterance.lang = "en-US";
+    const voice = chooseEnglishVoice();
+    if (voice) utterance.voice = voice;
+    session = { entry, utterance };
+    activeSpeech = session; // 발화 객체를 끝날 때까지 보관합니다.
+    utterance.onstart = () => {
+      if (activeSpeech === session) showSpeechStatus("AI 답변을 영어로 읽고 있어요.");
+    };
+    utterance.onend = () => finishAnswerSpeech(session, "답변 읽기가 끝났어요. 다시 들을 수 있어요.");
+    utterance.onerror = () => finishAnswerSpeech(session,
+      "답변을 읽지 못했어요. 기기의 영어 음성 설정을 확인하거나 다시 시도해 주세요.", true);
+    updateSpeechButtons();
+    showSpeechStatus("영어 답변 읽기를 준비하고 있어요.");
+    speechSynth.speak(utterance);
+  } catch {
+    const message = "답변을 읽지 못했어요. 기기의 영어 음성 설정을 확인하거나 다시 시도해 주세요.";
+    if (session) finishAnswerSpeech(session, message, true);
+    else showSpeechStatus(message, true);
+  }
+}
+
+function addAnswerSpeechControls(content, text) {
+  if (speechEntries.has(content) || typeof text !== "string" || !text.trim()) return;
+  const controls = document.createElement("div");
+  controls.className = "speech-controls";
+  controls.setAttribute("role", "group");
+  controls.setAttribute("aria-label", "AI 답변 음성 재생");
+  const playButton = document.createElement("button");
+  playButton.type = "button";
+  playButton.className = "speech-button speech-play-button";
+  playButton.textContent = "답변 듣기";
+  playButton.disabled = !speechSupported || activeRecording !== null || microphoneTestInFlight;
+  playButton.setAttribute("aria-pressed", "false");
+  playButton.setAttribute("aria-describedby", "speech-note speech-status");
+  const stopButton = document.createElement("button");
+  stopButton.type = "button";
+  stopButton.className = "speech-button speech-stop-button";
+  stopButton.textContent = "읽기 중지";
+  stopButton.disabled = true;
+  const entry = { controls, playButton, stopButton, text: text.trim() };
+  speechEntries.set(content, entry);
+  controls.append(playButton, stopButton);
+  content.append(controls);
+  playButton.addEventListener("click", () => speakAnswer(entry));
+  stopButton.addEventListener("click", () => {
+    if (activeSpeech?.entry === entry) stopAnswerSpeech("답변 읽기를 멈췄어요.");
+  });
+}
+
+function initializeAnswerSpeech() {
+  chatMessages.querySelectorAll(".ai-message .message-content").forEach((content) => {
+    const text = Array.from(content.querySelectorAll(".message-bubble p"))
+      .map((paragraph) => paragraph.textContent.trim()).filter(Boolean).join("\n");
+    addAnswerSpeechControls(content, text);
+  });
+  refreshSpeechVoices();
+  if (speechSupported && typeof speechSynth.addEventListener === "function") {
+    try {
+      speechSynth.addEventListener("voiceschanged", refreshSpeechVoices);
+    } catch {
+      // 이벤트 등록이 불가능해도 듣기 버튼을 누를 때 목록을 다시 확인합니다.
+    }
+  }
+  if (!speechSupported) {
+    showSpeechStatus("이 브라우저는 답변 읽기를 지원하지 않아요. 다른 브라우저에서 시도해 주세요.", true);
+  }
+  // 인증 만료 등으로 답변이 화면에서 제거되면 읽기도 중지합니다.
+  if (typeof MutationObserver === "function") {
+    const observer = new MutationObserver(() => {
+      if (activeSpeech?.entry.controls.isConnected === false) stopAnswerSpeech();
+    });
+    observer.observe(chatMessages, { childList: true });
   }
 }
 
@@ -611,6 +792,11 @@ recordClearButton.addEventListener("click", () => clearLocalRecording());
 recordTranscribeButton.addEventListener("click", transcribeLocalRecording);
 transcriptionUseButton.addEventListener("click", useTranscriptionInChat);
 recordingAudio.addEventListener("play", () => {
+  // audio 기본 컨트롤로 재생한 경우에도 답변 읽기와 겹치지 않습니다.
+  if (!stopAnswerSpeech("녹음 재생을 위해 답변 읽기를 멈췄어요.")) {
+    recordingAudio.pause();
+    return;
+  }
   if (recordingObjectUrl && !activeRecording) showRecordingStatus("녹음 재생 중입니다.");
 });
 recordingAudio.addEventListener("pause", () => {
@@ -631,6 +817,12 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => clearLocalRecording());
 document.querySelector(".logout-form")?.addEventListener("submit", () => clearLocalRecording());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") stopAnswerSpeech();
+});
+window.addEventListener("pagehide", () => stopAnswerSpeech());
+document.querySelector(".logout-form")?.addEventListener("submit", () => stopAnswerSpeech());
+initializeAnswerSpeech();
 updateRecordingControls();
 
 chatForm.addEventListener("submit", async (event) => {

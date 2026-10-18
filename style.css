@@ -91,8 +91,20 @@ h1 > span { color: var(--accent); }
 .user-message .message-author { justify-content: flex-end; }
 .user-message .message-content { max-width: 88%; }
 .user-message .message-bubble { border-radius: 13px 0 13px 13px; border-color: #4a5a43; background: #30412c; }
+.speech-controls { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; margin-top: 8px; }
+.speech-button { min-width: 44px; max-width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #4a5a43; border-radius: 9px; background: var(--surface-soft); color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; cursor: pointer; touch-action: manipulation; }
+.speech-play-button { color: var(--accent); }
+.speech-stop-button { color: var(--muted); }
+.speech-button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.speech-button:disabled { opacity: 0.45; cursor: not-allowed; }
+.speech-controls.is-speaking .speech-play-button { border-color: var(--accent); background: #243321; }
+.speech-controls.is-speaking .speech-stop-button { border-color: #789569; color: var(--text); }
 
 .conversation-controls { padding: 0 30px 20px; }
+.speech-note { margin-bottom: 10px; color: var(--muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.speech-status { color: var(--accent); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.speech-status:not(:empty) { margin-bottom: 12px; padding: 10px 12px; border: 1px solid #485d3e; border-radius: 9px; background: #243321; }
+.speech-status.is-error { border-color: #79574b; background: #362b24; color: #f1c3a8; }
 .start-button { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 54px; padding: 14px 20px; border: 1px solid transparent; border-radius: 11px; background: var(--accent); color: var(--accent-ink); font-size: 14px; font-weight: 650; cursor: pointer; transition: background 160ms ease, transform 160ms ease; touch-action: manipulation; }
 .start-button > svg { width: 20px; height: 20px; flex-shrink: 0; stroke-width: 1.8; }
 .start-button > .button-arrow { margin-left: auto; width: 18px; height: 18px; }
@@ -174,6 +186,7 @@ h1 > span { color: var(--accent); }
 @media (hover: hover) {
   .start-button:hover { background: #d2efbc; }
   .microphone-test-button:hover:not(:disabled) { border-color: var(--accent); background: #28372c; }
+  .speech-button:hover:not(:disabled) { border-color: var(--accent); background: #28372c; }
   .recording-button:hover:not(:disabled) { border-color: var(--accent); background: #28372c; }
   .recording-start-button:hover:not(:disabled) { background: #d2efbc; }
   .send-button:hover:not(:disabled) { background: #d2efbc; }
