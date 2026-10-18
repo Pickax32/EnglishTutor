@@ -51,7 +51,7 @@
             </header>
 
             <div class="conversation-body">
-              <!-- 마이크는 화면을 위한 장식입니다. 실제 녹음 기능은 없습니다. -->
+              <!-- 마이크 그림은 화면을 위한 장식입니다. 녹음은 아래 버튼으로 시작합니다. -->
               <div class="microphone-illustration" aria-hidden="true">
                 <div class="microphone-orbit">
                   <div class="microphone-core">
@@ -95,6 +95,21 @@
                 <button class="microphone-test-button" id="test-microphone" type="button" aria-describedby="microphone-test-note microphone-status" aria-busy="false">마이크 테스트</button>
                 <p class="microphone-test-note" id="microphone-test-note">마이크 접근을 확인한 뒤 연결을 바로 종료해요.</p>
                 <p class="microphone-status" id="microphone-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              </div>
+              <div class="recording-controls" id="recording-controls" role="group" aria-labelledby="recording-title" aria-describedby="recording-note">
+                <div class="recording-heading">
+                  <h3 class="recording-title" id="recording-title">내 목소리 녹음</h3>
+                  <span class="recording-time" id="recording-time" aria-label="녹음 시간" aria-live="off">0 / 15초</span>
+                </div>
+                <div class="recording-buttons">
+                  <button class="recording-button recording-start-button" id="start-recording" type="button" aria-describedby="recording-note recording-status">녹음 시작</button>
+                  <button class="recording-button" id="stop-recording" type="button" disabled>녹음 종료</button>
+                  <button class="recording-button" id="play-recording" type="button" aria-controls="recording-playback" disabled>녹음 재생</button>
+                  <button class="recording-button recording-clear-button" id="clear-recording" type="button" disabled>녹음 지우기</button>
+                </div>
+                <p class="recording-note" id="recording-note">최대 15초 · 녹음은 서버로 보내지 않고 이 화면에서만 재생해요. 새 녹음을 시작하거나 화면을 나가면 이전 녹음이 지워져요.</p>
+                <p class="recording-status" id="recording-status" role="status" aria-live="polite" aria-atomic="true">녹음 시작을 눌러 내 목소리를 연습해 보세요.</p>
+                <audio class="recording-playback" id="recording-playback" controls preload="metadata" aria-label="녹음한 내 목소리" hidden></audio>
               </div>
               <form class="chat-form" id="chat-form" hidden>
                 <label class="input-label" for="message-input">영어로 한마디 건네 보세요.</label>

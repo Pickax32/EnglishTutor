@@ -129,7 +129,7 @@ function microphoneErrorMessage(error) {
 }
 
 async function testMicrophone() {
-  if (microphoneTestInFlight) return;
+  if (microphoneTestInFlight || activeRecording) return;
   if (window.isSecureContext === false) {
     showMicrophoneStatus("마이크 테스트에는 HTTPS 연결이 필요합니다. 태블릿에서는 HTTPS 주소로 접속해 주세요.", true);
     return;
@@ -144,6 +144,7 @@ async function testMicrophone() {
   microphoneTestButton.disabled = true;
   microphoneTestButton.textContent = "확인 중…";
   microphoneTestButton.setAttribute("aria-busy", "true");
+  updateRecordingControls();
   showMicrophoneStatus("마이크 권한을 확인하고 있어요. 브라우저의 권한 요청에 응답해 주세요.");
 
   let stream = null;
@@ -159,10 +160,268 @@ async function testMicrophone() {
     microphoneTestButton.disabled = false;
     microphoneTestButton.textContent = "마이크 테스트";
     microphoneTestButton.setAttribute("aria-busy", "false");
+    updateRecordingControls();
   }
 }
 
 microphoneTestButton.addEventListener("click", testMicrophone);
+
+// STEP 3-2A: 음성은 이 화면의 메모리에서만 다루며 녹음·재생 데이터를 서버로 보내지 않습니다.
+const recordingControls = document.querySelector("#recording-controls");
+const recordStartButton = document.querySelector("#start-recording");
+const recordStopButton = document.querySelector("#stop-recording");
+const recordPlayButton = document.querySelector("#play-recording");
+const recordClearButton = document.querySelector("#clear-recording");
+const recordingStatus = document.querySelector("#recording-status");
+const recordingTime = document.querySelector("#recording-time");
+const recordingAudio = document.querySelector("#recording-playback");
+const MAX_RECORDING_MS = 15000;
+let activeRecording = null;
+let recordingObjectUrl = null;
+let playbackRequest = 0;
+
+function showRecordingStatus(message, isError = false) {
+  recordingStatus.textContent = message;
+  recordingStatus.classList.toggle("is-error", isError);
+}
+
+function updateRecordingControls() {
+  const busy = activeRecording !== null;
+  recordStartButton.disabled = busy || microphoneTestInFlight;
+  recordStopButton.disabled = !busy || activeRecording.phase === "stopping";
+  recordPlayButton.disabled = busy || !recordingObjectUrl;
+  recordClearButton.disabled = busy || !recordingObjectUrl;
+  microphoneTestButton.disabled = microphoneTestInFlight || busy;
+  recordingControls.classList.toggle("is-recording", activeRecording?.phase === "recording");
+  recordingControls.setAttribute("aria-busy", String(busy && activeRecording.phase !== "recording"));
+}
+
+function releaseRecordingTracks(session) {
+  const stream = session.stream;
+  session.stream = null;
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
+function clearRecordingTimers(session) {
+  clearTimeout(session.timeout);
+  clearInterval(session.clock);
+  session.timeout = null;
+  session.clock = null;
+}
+
+function updateRecordingClock(session) {
+  const seconds = Math.min(15, Math.floor((performance.now() - session.startedAt) / 1000));
+  recordingTime.textContent = `${seconds} / 15초`;
+}
+
+function releaseRecordingPlayback() {
+  playbackRequest += 1;
+  const previousUrl = recordingObjectUrl;
+  recordingObjectUrl = null;
+  recordingAudio.pause();
+  recordingAudio.removeAttribute("src");
+  recordingAudio.load();
+  recordingAudio.hidden = true;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
+}
+
+function detachRecorder(session) {
+  if (!session.recorder) return;
+  session.recorder.ondataavailable = null;
+  session.recorder.onstop = null;
+  session.recorder.onerror = null;
+}
+
+function discardRecordingSession(session) {
+  session.discarded = true;
+  clearRecordingTimers(session);
+  detachRecorder(session);
+  try {
+    if (session.recorder && session.recorder.state !== "inactive") session.recorder.stop();
+  } catch {
+    // 종료 중 오류가 발생해도 마이크와 임시 녹음 데이터는 정리합니다.
+  } finally {
+    releaseRecordingTracks(session);
+    session.chunks = [];
+    session.recorder = null;
+    if (activeRecording === session) activeRecording = null;
+    updateRecordingControls();
+  }
+}
+
+function recordingErrorMessage(error) {
+  if (error?.name === "NotSupportedError") {
+    return "이 브라우저에서는 음성 녹음을 사용할 수 없습니다. 브라우저를 업데이트하거나 다른 브라우저에서 시도해 주세요.";
+  }
+  if (["NotAllowedError", "PermissionDeniedError", "NotFoundError", "NotReadableError", "SecurityError"].includes(error?.name)) {
+    return microphoneErrorMessage(error);
+  }
+  return "녹음에 실패했습니다. 마이크와 브라우저 설정을 확인한 뒤 다시 시도해 주세요.";
+}
+
+function finishRecording(session) {
+  clearRecordingTimers(session);
+  releaseRecordingTracks(session);
+  if (activeRecording !== session || session.discarded) return;
+  const mimeType = session.recorder.mimeType || session.chunks.find((chunk) => chunk.type)?.type || "";
+  const chunks = session.chunks;
+  session.chunks = [];
+  detachRecorder(session);
+  session.recorder = null;
+  activeRecording = null;
+  try {
+    // 브라우저가 실제 선택한 형식을 사용하며 특정 MIME 타입을 강제하지 않습니다.
+    const blob = mimeType ? new Blob(chunks, { type: mimeType }) : new Blob(chunks);
+    if (!blob.size) throw new Error("Empty recording");
+    recordingObjectUrl = URL.createObjectURL(blob);
+    recordingAudio.src = recordingObjectUrl;
+    recordingAudio.hidden = false;
+    recordingAudio.load();
+    showRecordingStatus(session.stopReason === "limit"
+      ? "15초가 되어 자동으로 녹음을 종료했습니다. 녹음을 재생할 수 있어요."
+      : "녹음이 종료되었습니다. 녹음 재생을 눌러 들어보세요.");
+  } catch {
+    releaseRecordingPlayback();
+    showRecordingStatus("재생할 녹음이 만들어지지 않았습니다. 다시 녹음해 주세요.", true);
+  } finally {
+    updateRecordingControls();
+  }
+}
+
+function stopLocalRecording(reason = "manual") {
+  const session = activeRecording;
+  if (!session || session.phase === "stopping") return;
+  if (session.phase === "requesting") {
+    discardRecordingSession(session);
+    showRecordingStatus("녹음 시작을 취소했습니다. 다시 시작할 수 있어요.");
+    return;
+  }
+  updateRecordingClock(session);
+  session.phase = "stopping";
+  session.stopReason = reason;
+  clearRecordingTimers(session);
+  updateRecordingControls();
+  showRecordingStatus("녹음을 종료하고 재생을 준비하고 있어요.");
+  try {
+    if (session.recorder.state !== "inactive") session.recorder.stop();
+  } catch (error) {
+    discardRecordingSession(session);
+    showRecordingStatus(recordingErrorMessage(error), true);
+  } finally {
+    // 최종 데이터는 stop 이벤트에서 받고 마이크는 종료 버튼을 누르는 즉시 해제합니다.
+    releaseRecordingTracks(session);
+  }
+}
+
+async function startLocalRecording() {
+  if (activeRecording || microphoneTestInFlight) return;
+  if (window.isSecureContext === false) {
+    showRecordingStatus("녹음에는 HTTPS 연결이 필요합니다. HTTPS 주소로 접속해 주세요.", true);
+    return;
+  }
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function" || typeof MediaRecorder !== "function") {
+    showRecordingStatus("이 브라우저는 음성 녹음을 지원하지 않습니다. 브라우저를 업데이트하거나 다른 브라우저에서 시도해 주세요.", true);
+    return;
+  }
+
+  releaseRecordingPlayback();
+  recordingTime.textContent = "0 / 15초";
+  const session = {
+    phase: "requesting", stream: null, recorder: null, chunks: [],
+    timeout: null, clock: null, startedAt: 0, stopReason: "manual", discarded: false,
+  };
+  activeRecording = session;
+  updateRecordingControls();
+  showRecordingStatus("마이크 권한을 확인하고 있어요. 권한 요청에 응답해 주세요.");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // 취소한 뒤 늦게 허용된 이전 요청도 받은 모든 트랙을 즉시 종료합니다.
+    if (activeRecording !== session || session.discarded || document.visibilityState === "hidden") {
+      stream.getTracks().forEach((track) => track.stop());
+      if (activeRecording === session) discardRecordingSession(session);
+      return;
+    }
+    session.stream = stream;
+    const recorder = new MediaRecorder(stream);
+    session.recorder = recorder;
+    recorder.ondataavailable = (event) => {
+      if (activeRecording !== session || session.discarded) return;
+      if (event.data?.size > 0) session.chunks.push(event.data);
+      if (session.phase === "recording" && performance.now() - session.startedAt >= MAX_RECORDING_MS) stopLocalRecording("limit");
+    };
+    recorder.onstop = () => finishRecording(session);
+    recorder.onerror = (event) => {
+      if (activeRecording !== session) return;
+      discardRecordingSession(session);
+      showRecordingStatus(recordingErrorMessage(event.error), true);
+    };
+    recorder.start(250);
+    session.phase = "recording";
+    session.startedAt = performance.now();
+    session.timeout = setTimeout(() => {
+      if (activeRecording === session) stopLocalRecording("limit");
+    }, MAX_RECORDING_MS);
+    session.clock = setInterval(() => {
+      if (activeRecording !== session) return;
+      updateRecordingClock(session);
+      if (performance.now() - session.startedAt >= MAX_RECORDING_MS) stopLocalRecording("limit");
+    }, 250);
+    updateRecordingControls();
+    showRecordingStatus("녹음 중입니다. 최대 15초까지 녹음해요. 끝나면 녹음 종료를 눌러 주세요.");
+  } catch (error) {
+    if (activeRecording !== session) return;
+    discardRecordingSession(session);
+    showRecordingStatus(recordingErrorMessage(error), true);
+  }
+}
+
+function clearLocalRecording(message = "녹음을 지웠습니다. 다시 녹음할 수 있어요.") {
+  if (activeRecording) discardRecordingSession(activeRecording);
+  releaseRecordingPlayback();
+  recordingTime.textContent = "0 / 15초";
+  showRecordingStatus(message);
+  updateRecordingControls();
+}
+
+async function playLocalRecording() {
+  if (activeRecording || !recordingObjectUrl) return;
+  const request = ++playbackRequest;
+  try {
+    recordingAudio.currentTime = 0;
+    await recordingAudio.play();
+  } catch {
+    if (request === playbackRequest && recordingObjectUrl) {
+      showRecordingStatus("녹음을 재생하지 못했습니다. 녹음 재생을 다시 누르거나 새로 녹음해 주세요.", true);
+    }
+  }
+}
+
+recordStartButton.addEventListener("click", startLocalRecording);
+recordStopButton.addEventListener("click", () => stopLocalRecording());
+recordPlayButton.addEventListener("click", playLocalRecording);
+recordClearButton.addEventListener("click", () => clearLocalRecording());
+recordingAudio.addEventListener("play", () => {
+  if (recordingObjectUrl && !activeRecording) showRecordingStatus("녹음 재생 중입니다.");
+});
+recordingAudio.addEventListener("pause", () => {
+  if (recordingObjectUrl && !activeRecording && !recordingAudio.ended) showRecordingStatus("재생을 멈췄습니다. 다시 들을 수 있어요.");
+});
+recordingAudio.addEventListener("ended", () => {
+  if (recordingObjectUrl && !activeRecording) showRecordingStatus("재생이 끝났습니다. 다시 들을 수 있어요.");
+});
+recordingAudio.addEventListener("error", () => {
+  if (!recordingObjectUrl) return;
+  clearLocalRecording("녹음을 재생할 수 없습니다. 다시 녹음해 주세요.");
+  showRecordingStatus("녹음을 재생할 수 없습니다. 다시 녹음해 주세요.", true);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && (activeRecording || recordingObjectUrl)) {
+    clearLocalRecording("화면이 숨겨져 녹음과 재생을 정리했습니다. 다시 녹음해 주세요.");
+  }
+});
+window.addEventListener("pagehide", () => clearLocalRecording());
+document.querySelector(".logout-form")?.addEventListener("submit", () => clearLocalRecording());
+updateRecordingControls();
 
 chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
