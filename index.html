@@ -91,6 +91,11 @@
                   <path d="M5 12h14m-5-5 5 5-5 5" />
                 </svg>
               </button>
+              <div class="microphone-test">
+                <button class="microphone-test-button" id="test-microphone" type="button" aria-describedby="microphone-test-note microphone-status" aria-busy="false">마이크 테스트</button>
+                <p class="microphone-test-note" id="microphone-test-note">마이크 접근을 확인한 뒤 연결을 바로 종료해요.</p>
+                <p class="microphone-status" id="microphone-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              </div>
               <form class="chat-form" id="chat-form" hidden>
                 <label class="input-label" for="message-input">영어로 한마디 건네 보세요.</label>
                 <div class="message-composer">

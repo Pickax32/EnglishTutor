@@ -96,6 +96,74 @@ messageInput.addEventListener("keydown", (event) => {
   }
 });
 
+// STEP 3-1A: 마이크 접근만 확인합니다. 음성을 녹음하거나 서버에 보내지 않습니다.
+const microphoneTestButton = document.querySelector("#test-microphone");
+const microphoneStatus = document.querySelector("#microphone-status");
+let microphoneTestInFlight = false;
+
+function showMicrophoneStatus(message, isError = false) {
+  microphoneStatus.textContent = message;
+  microphoneStatus.classList.toggle("is-error", isError);
+}
+
+function microphoneErrorMessage(error) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return "마이크 권한이 필요합니다";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "마이크를 찾을 수 없습니다. 기기에 마이크가 연결되어 있는지 확인해 주세요.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "마이크를 사용할 수 없습니다. 다른 앱에서 사용 중인지 확인한 뒤 다시 시도해 주세요.";
+    case "AbortError":
+      return "마이크 연결이 중단되었습니다. 잠시 후 다시 시도해 주세요.";
+    case "SecurityError":
+      return "브라우저의 보안 설정으로 마이크가 차단되었습니다. 사이트 권한을 확인해 주세요.";
+    case "InvalidStateError":
+      return "이 화면을 활성화한 뒤 마이크 테스트를 다시 눌러 주세요.";
+    default:
+      return "마이크에 연결하지 못했습니다. 브라우저의 마이크 설정을 확인한 뒤 다시 시도해 주세요.";
+  }
+}
+
+async function testMicrophone() {
+  if (microphoneTestInFlight) return;
+  if (window.isSecureContext === false) {
+    showMicrophoneStatus("마이크 테스트에는 HTTPS 연결이 필요합니다. 태블릿에서는 HTTPS 주소로 접속해 주세요.", true);
+    return;
+  }
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    showMicrophoneStatus("이 브라우저는 마이크 테스트를 지원하지 않습니다. 브라우저를 업데이트하거나 다른 브라우저에서 다시 시도해 주세요.", true);
+    return;
+  }
+
+  // 권한 요청 중에는 중복 클릭을 막습니다. 텍스트 채팅 상태와는 별개입니다.
+  microphoneTestInFlight = true;
+  microphoneTestButton.disabled = true;
+  microphoneTestButton.textContent = "확인 중…";
+  microphoneTestButton.setAttribute("aria-busy", "true");
+  showMicrophoneStatus("마이크 권한을 확인하고 있어요. 브라우저의 권한 요청에 응답해 주세요.");
+
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    showMicrophoneStatus("마이크 연결 성공");
+  } catch (error) {
+    showMicrophoneStatus(microphoneErrorMessage(error), true);
+  } finally {
+    // 스트림의 모든 트랙을 즉시 종료하여 마이크를 계속 사용하지 않습니다.
+    stream?.getTracks().forEach((track) => track.stop());
+    microphoneTestInFlight = false;
+    microphoneTestButton.disabled = false;
+    microphoneTestButton.textContent = "마이크 테스트";
+    microphoneTestButton.setAttribute("aria-busy", "false");
+  }
+}
+
+microphoneTestButton.addEventListener("click", testMicrophone);
+
 chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!conversationStarted || inFlight) return;
