@@ -37,6 +37,7 @@ function setLoading(isLoading) {
   chatForm.setAttribute("aria-busy", String(isLoading));
   sendButton.textContent = isLoading ? "Loading..." : "Send";
   updateSendButton();
+  updateTranscriptionUseButton();
 }
 
 // 문장과 AI 답변은 HTML로 해석하지 않고 텍스트로만 표시합니다.
@@ -179,6 +180,7 @@ const recordingAudio = document.querySelector("#recording-playback");
 const transcriptionStatus = document.querySelector("#transcription-status");
 const transcriptionResult = document.querySelector("#transcription-result");
 const transcriptionText = document.querySelector("#transcription-text");
+const transcriptionUseButton = document.querySelector("#use-transcription");
 const transcriptionLogin = document.querySelector("#transcription-login");
 const MAX_RECORDING_MS = 15000;
 const MAX_TRANSCRIPTION_BYTES = 5 * 1024 * 1024;
@@ -206,6 +208,7 @@ function updateRecordingControls() {
   microphoneTestButton.disabled = microphoneTestInFlight || busy;
   recordingControls.classList.toggle("is-recording", activeRecording?.phase === "recording");
   recordingControls.setAttribute("aria-busy", String(busy && activeRecording.phase !== "recording"));
+  updateTranscriptionUseButton();
 }
 
 function releaseRecordingTracks(session) {
@@ -417,6 +420,43 @@ function showTranscriptionStatus(message, isError = false) {
   transcriptionStatus.classList.toggle("is-error", isError);
 }
 
+// STEP 3-4A: 완료된 변환 결과를 전송하지 않고 채팅 입력창으로 옮깁니다.
+function updateTranscriptionUseButton() {
+  const hasText = !transcriptionResult.hidden && transcriptionText.textContent.trim().length > 0;
+  transcriptionUseButton.disabled = !hasText || transcriptionRequest !== null || inFlight || messageInput.disabled;
+}
+
+function useTranscriptionInChat() {
+  const text = transcriptionText.textContent.trim();
+  if (!text || transcriptionResult.hidden || transcriptionRequest || inFlight || messageInput.disabled) return;
+
+  const draft = messageInput.value;
+  if (draft.length > 0) {
+    let confirmed = false;
+    try {
+      confirmed = window.confirm("채팅 입력창에 작성 중인 문장이 있습니다. STT 결과 문장으로 바꿀까요?");
+    } catch {
+      // 확인 창을 사용할 수 없어도 기존 문장은 그대로 보존합니다.
+    }
+    if (!confirmed) return;
+  }
+  // 확인 중 결과나 입력 상태가 바뀌었다면 오래된 문장으로 덮어쓰지 않습니다.
+  if (transcriptionRequest || transcriptionResult.hidden || transcriptionText.textContent.trim() !== text
+      || inFlight || messageInput.disabled || messageInput.value !== draft) return;
+
+  // 기존 시작 버튼의 화면 전환만 재사용합니다. 메시지를 전송하지 않습니다.
+  if (!conversationStarted) startButton.click();
+  messageInput.value = text;
+  // 기존 input 이벤트가 Send 버튼 상태를 갱신하도록 합니다.
+  messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+  messageInput.focus();
+  if (Array.from(text).length > MAX_USER_MESSAGE_LENGTH) {
+    showNotice("문장이 500자를 넘어요. 입력창에서 500자 이내로 줄인 뒤 Send를 눌러 주세요.", true);
+  } else {
+    showNotice("채팅 입력창에 넣었어요. 문장을 수정한 뒤 Send를 눌러 보내세요.");
+  }
+}
+
 function clearTranscription() {
   const previous = transcriptionRequest;
   // 먼저 무효화해 이전 요청의 catch/finally가 새 요청의 화면을 바꾸지 못하게 합니다.
@@ -429,6 +469,7 @@ function clearTranscription() {
   transcriptionResult.hidden = true;
   transcriptionLogin.hidden = true;
   showTranscriptionStatus("");
+  updateTranscriptionUseButton();
 }
 
 function recordingUploadFilename(blob) {
@@ -568,6 +609,7 @@ recordStopButton.addEventListener("click", () => stopLocalRecording());
 recordPlayButton.addEventListener("click", playLocalRecording);
 recordClearButton.addEventListener("click", () => clearLocalRecording());
 recordTranscribeButton.addEventListener("click", transcribeLocalRecording);
+transcriptionUseButton.addEventListener("click", useTranscriptionInChat);
 recordingAudio.addEventListener("play", () => {
   if (recordingObjectUrl && !activeRecording) showRecordingStatus("녹음 재생 중입니다.");
 });
