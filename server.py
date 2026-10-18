@@ -17,6 +17,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from limits.errors import StorageError
 from openai import OpenAI
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from werkzeug.security import check_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -153,6 +154,25 @@ MAX_REQUEST_MESSAGES = MAX_HISTORY_TURNS * 2 + 1
 MAX_USER_MESSAGE_CHARS = 500
 MAX_ASSISTANT_MESSAGE_CHARS = 2000
 
+# STT는 텍스트 대화와 별도의 업로드·요청 한도를 사용합니다.
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+TRANSCRIBE_ERROR = "음성을 텍스트로 변환하지 못했습니다. 잠시 후 다시 시도해 주세요."
+MAX_AUDIO_BYTES = 5 * 1024 * 1024  # 5MiB: 음성 파일 자체의 최대 크기입니다.
+# multipart 경계와 파일 헤더를 위한 여유이며, 파일 한도는 별도로 검사합니다.
+MAX_TRANSCRIBE_REQUEST_BYTES = MAX_AUDIO_BYTES + 64 * 1024
+# 첫 MIME은 OpenAI에 보낼 표준 값이고, 나머지는 브라우저에서 사용하는 별칭입니다.
+AUDIO_MIME_TYPES = {
+    ".flac": ("audio/flac", "audio/x-flac"),
+    ".mp3": ("audio/mpeg", "audio/mp3", "audio/x-mp3"),
+    ".mp4": ("audio/mp4", "video/mp4", "application/mp4"),
+    ".mpeg": ("audio/mpeg", "video/mpeg"),
+    ".mpga": ("audio/mpeg", "audio/mpga"),
+    ".m4a": ("audio/mp4", "audio/m4a", "audio/x-m4a"),
+    ".ogg": ("audio/ogg", "application/ogg"),
+    ".wav": ("audio/wav", "audio/wave", "audio/x-wav", "audio/vnd.wave"),
+    ".webm": ("audio/webm", "video/webm"),
+}
+
 
 def get_csrf_token():
     token = session.get("csrf_token")
@@ -175,7 +195,7 @@ def valid_csrf_token(token):
 
 @app.errorhandler(StorageError)
 def rate_limit_storage_unavailable(_error):
-    # 제한 검사에서 실패하면 로그인/채팅 함수에 진입하지 않아 OpenAI도 호출하지 않습니다.
+    # 제한 검사에서 실패하면 로그인/채팅/STT 함수에 진입하지 않아 OpenAI도 호출하지 않습니다.
     # 원본 Redis 예외에는 접속 정보가 있을 수 있어 로그나 응답에 포함하지 않습니다.
     app.logger.warning("Rate limit storage unavailable.")
     return jsonify({"error": "요청 제한 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."}), 503
@@ -190,7 +210,7 @@ def rate_limit_exceeded(_error):
 @app.after_request
 def protect_auth_responses(response):
     # 로그인 화면과 대화 응답을 브라우저 캐시에 남기지 않습니다.
-    if request.path in ("/", "/index.html", "/login", "/logout", "/api/chat"):
+    if request.path in ("/", "/index.html", "/login", "/logout", "/api/chat", "/api/transcribe"):
         response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -335,6 +355,80 @@ def chat():
         return jsonify({"error": CHAT_ERROR}), 502
 
     return jsonify({"reply": reply})
+
+
+@app.post("/api/transcribe")
+@limiter.limit(
+    "5 per minute;30 per hour",
+    key_func=chat_account_key,
+    methods=["POST"],
+    # chat과 같은 공용 계정 키를 사용하되, 한도는 STT 엔드포인트에 따로 적용합니다.
+    # 미로그인 요청은 Redis 검사 대신 아래 인증 검사에서 401을 반환합니다.
+    exempt_when=lambda: session.get("authenticated") is not True,
+)
+def transcribe():
+    if session.get("authenticated") is not True:
+        return jsonify({"error": "로그인이 필요합니다."}), 401
+    if not valid_csrf_token(request.headers.get("X-CSRF-Token")):
+        return jsonify({"error": "요청을 확인할 수 없습니다. 페이지를 새로고침해 주세요."}), 403
+    if request.mimetype != "multipart/form-data":
+        return jsonify({"error": "multipart/form-data의 audio 파일로 보내 주세요."}), 415
+
+    # Flask 3.1의 요청별 제한입니다. 기존 로그인·채팅 요청의 설정은 바꾸지 않습니다.
+    # 반드시 request.files를 읽기 전에 설정해 multipart 파싱 단계도 제한합니다.
+    request.max_content_length = MAX_TRANSCRIBE_REQUEST_BYTES
+    request.max_form_memory_size = 128 * 1024
+    request.max_form_parts = 4
+    try:
+        if request.content_length is not None and request.content_length > MAX_TRANSCRIBE_REQUEST_BYTES:
+            raise RequestEntityTooLarge()
+        files = request.files
+        if set(files) != {"audio"} or len(files.getlist("audio")) != 1:
+            return jsonify({"error": "audio 항목에 음성 파일 하나를 보내 주세요."}), 400
+        audio = files["audio"]
+        if not audio.filename:
+            return jsonify({"error": "음성 파일이 없습니다. 녹음 파일을 보내 주세요."}), 400
+
+        extension = Path(audio.filename).suffix.lower()
+        mime_types = AUDIO_MIME_TYPES.get(extension)
+        # codecs 파라미터가 제거된 MIME을 검사합니다. 일반 바이너리 MIME은
+        # 확장자가 허용된 경우에만 받으며, 실제 디코딩 검사는 전사 API가 수행합니다.
+        if mime_types is None or audio.mimetype not in (*mime_types, "", "application/octet-stream"):
+            return jsonify({"error": "지원하는 음성 형식은 flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm입니다."}), 415
+
+        try:
+            audio_bytes = audio.read(MAX_AUDIO_BYTES + 1)
+        finally:
+            # Flask의 요청용 임시 스트림만 사용하며 업로드 파일을 영구 저장하지 않습니다.
+            audio.close()
+        if not audio_bytes:
+            return jsonify({"error": "음성 파일이 비어 있습니다. 다시 녹음해 주세요."}), 400
+        if len(audio_bytes) > MAX_AUDIO_BYTES:
+            raise RequestEntityTooLarge()
+    except RequestEntityTooLarge:
+        return jsonify({"error": "음성 파일은 최대 5MiB까지 보낼 수 있습니다."}), 413
+    except (BadRequest, OSError):
+        return jsonify({"error": "음성 파일 요청을 읽을 수 없습니다. 다시 보내 주세요."}), 400
+
+    try:
+        # SDK가 서버의 OPENAI_API_KEY 환경변수를 자동으로 읽습니다.
+        # 사용자 파일명은 전달하지 않고, 검증된 확장자의 고정 이름을 사용합니다.
+        with OpenAI(timeout=30.0, max_retries=0) as client:
+            response = client.audio.transcriptions.create(
+                model=TRANSCRIBE_MODEL,
+                file=("recording" + extension, audio_bytes, mime_types[0]),
+                language="en",
+                response_format="json",
+            )
+        text = response.text
+        if not isinstance(text, str) or not text.strip():
+            return jsonify({"error": TRANSCRIBE_ERROR}), 502
+    except Exception:
+        # 예외 상세·음성 데이터·전사 텍스트·비밀값은 로그나 응답에 넣지 않습니다.
+        app.logger.warning("Transcription request failed.")
+        return jsonify({"error": TRANSCRIBE_ERROR}), 502
+
+    return jsonify({"text": text.strip()})
 
 
 # 이 파일을 직접 실행할 때만 로컬 서버를 시작합니다.

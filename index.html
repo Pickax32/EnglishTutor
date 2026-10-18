@@ -106,10 +106,18 @@
                   <button class="recording-button" id="stop-recording" type="button" disabled>녹음 종료</button>
                   <button class="recording-button" id="play-recording" type="button" aria-controls="recording-playback" disabled>녹음 재생</button>
                   <button class="recording-button recording-clear-button" id="clear-recording" type="button" disabled>녹음 지우기</button>
+                  <button class="recording-button transcription-button" id="transcribe-recording" type="button" aria-controls="transcription-result" aria-describedby="transcription-note transcription-status" aria-busy="false" disabled>음성을 텍스트로 변환</button>
                 </div>
-                <p class="recording-note" id="recording-note">최대 15초 · 녹음은 서버로 보내지 않고 이 화면에서만 재생해요. 새 녹음을 시작하거나 화면을 나가면 이전 녹음이 지워져요.</p>
+                <p class="recording-note" id="recording-note">최대 15초 · 녹음과 재생은 이 화면에서 처리해요. 변환 버튼을 누를 때만 음성이 서버로 전송돼요. 새 녹음을 시작하거나 화면을 나가면 녹음과 변환 결과가 지워져요.</p>
                 <p class="recording-status" id="recording-status" role="status" aria-live="polite" aria-atomic="true">녹음 시작을 눌러 내 목소리를 연습해 보세요.</p>
                 <audio class="recording-playback" id="recording-playback" controls preload="metadata" aria-label="녹음한 내 목소리" hidden></audio>
+                <p class="transcription-note" id="transcription-note">녹음이 끝나면 변환 버튼을 눌러 영어 문장을 확인하세요. 변환된 문장은 채팅으로 자동 전송되지 않아요.</p>
+                <p class="transcription-status" id="transcription-status" role="status" aria-live="polite" aria-atomic="true"></p>
+                <a class="transcription-login" id="transcription-login" href="/login" hidden>다시 로그인하기</a>
+                <div class="transcription-result" id="transcription-result" aria-labelledby="transcription-title" hidden>
+                  <h4 class="transcription-title" id="transcription-title">변환된 영어 문장</h4>
+                  <p class="transcription-text" id="transcription-text" lang="en" dir="auto"></p>
+                </div>
               </div>
               <form class="chat-form" id="chat-form" hidden>
                 <label class="input-label" for="message-input">영어로 한마디 건네 보세요.</label>

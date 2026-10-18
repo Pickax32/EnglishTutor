@@ -166,18 +166,27 @@ async function testMicrophone() {
 
 microphoneTestButton.addEventListener("click", testMicrophone);
 
-// STEP 3-2A: 음성은 이 화면의 메모리에서만 다루며 녹음·재생 데이터를 서버로 보내지 않습니다.
+// STEP 3-2A/3-3C: 녹음·재생은 로컬에서 처리하고 변환 버튼을 누를 때만 음성을 보냅니다.
 const recordingControls = document.querySelector("#recording-controls");
 const recordStartButton = document.querySelector("#start-recording");
 const recordStopButton = document.querySelector("#stop-recording");
 const recordPlayButton = document.querySelector("#play-recording");
 const recordClearButton = document.querySelector("#clear-recording");
+const recordTranscribeButton = document.querySelector("#transcribe-recording");
 const recordingStatus = document.querySelector("#recording-status");
 const recordingTime = document.querySelector("#recording-time");
 const recordingAudio = document.querySelector("#recording-playback");
+const transcriptionStatus = document.querySelector("#transcription-status");
+const transcriptionResult = document.querySelector("#transcription-result");
+const transcriptionText = document.querySelector("#transcription-text");
+const transcriptionLogin = document.querySelector("#transcription-login");
 const MAX_RECORDING_MS = 15000;
+const MAX_TRANSCRIPTION_BYTES = 5 * 1024 * 1024;
+const TRANSCRIPTION_TIMEOUT_MS = 45000;
 let activeRecording = null;
 let recordingObjectUrl = null;
+let recordedBlob = null;
+let transcriptionRequest = null;
 let playbackRequest = 0;
 
 function showRecordingStatus(message, isError = false) {
@@ -191,6 +200,9 @@ function updateRecordingControls() {
   recordStopButton.disabled = !busy || activeRecording.phase === "stopping";
   recordPlayButton.disabled = busy || !recordingObjectUrl;
   recordClearButton.disabled = busy || !recordingObjectUrl;
+  recordTranscribeButton.disabled = busy || microphoneTestInFlight || !recordedBlob || transcriptionRequest !== null;
+  recordTranscribeButton.textContent = transcriptionRequest ? "변환 중..." : "음성을 텍스트로 변환";
+  recordTranscribeButton.setAttribute("aria-busy", String(transcriptionRequest !== null));
   microphoneTestButton.disabled = microphoneTestInFlight || busy;
   recordingControls.classList.toggle("is-recording", activeRecording?.phase === "recording");
   recordingControls.setAttribute("aria-busy", String(busy && activeRecording.phase !== "recording"));
@@ -215,6 +227,9 @@ function updateRecordingClock(session) {
 }
 
 function releaseRecordingPlayback() {
+  // 새 녹음·삭제·화면 이탈 때 Blob과 결과를 지우고 이전 응답을 무효화합니다.
+  clearTranscription();
+  recordedBlob = null;
   playbackRequest += 1;
   const previousUrl = recordingObjectUrl;
   recordingObjectUrl = null;
@@ -277,6 +292,7 @@ function finishRecording(session) {
     recordingAudio.src = recordingObjectUrl;
     recordingAudio.hidden = false;
     recordingAudio.load();
+    recordedBlob = blob;
     showRecordingStatus(session.stopReason === "limit"
       ? "15초가 되어 자동으로 녹음을 종료했습니다. 녹음을 재생할 수 있어요."
       : "녹음이 종료되었습니다. 녹음 재생을 눌러 들어보세요.");
@@ -396,10 +412,162 @@ async function playLocalRecording() {
   }
 }
 
+function showTranscriptionStatus(message, isError = false) {
+  transcriptionStatus.textContent = message;
+  transcriptionStatus.classList.toggle("is-error", isError);
+}
+
+function clearTranscription() {
+  const previous = transcriptionRequest;
+  // 먼저 무효화해 이전 요청의 catch/finally가 새 요청의 화면을 바꾸지 못하게 합니다.
+  transcriptionRequest = null;
+  if (previous) {
+    clearTimeout(previous.timeout);
+    previous.controller.abort();
+  }
+  transcriptionText.textContent = "";
+  transcriptionResult.hidden = true;
+  transcriptionLogin.hidden = true;
+  showTranscriptionStatus("");
+}
+
+function recordingUploadFilename(blob) {
+  // MIME의 codecs 파라미터는 파일 확장자 선택에 사용하지 않습니다.
+  const mimeType = blob.type.split(";")[0].trim().toLowerCase();
+  const extensions = {
+    "audio/webm": "webm", "video/webm": "webm",
+    "audio/ogg": "ogg", "application/ogg": "ogg",
+    "audio/mp4": "mp4", "video/mp4": "mp4", "application/mp4": "mp4",
+    "audio/m4a": "m4a", "audio/x-m4a": "m4a",
+    "audio/wav": "wav", "audio/wave": "wav", "audio/x-wav": "wav", "audio/vnd.wave": "wav",
+    "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/x-mp3": "mp3",
+    "video/mpeg": "mpeg", "audio/mpga": "mpga",
+    "audio/flac": "flac", "audio/x-flac": "flac",
+  };
+  const extension = Object.prototype.hasOwnProperty.call(extensions, mimeType) ? extensions[mimeType] : null;
+  // 형식을 알 수 없으면 WebM으로 추측해서 전송하지 않습니다.
+  return extension ? `recording.${extension}` : null;
+}
+
+function transcriptionErrorMessage(status) {
+  switch (status) {
+    case 401:
+      return "로그인이 만료되었어요. 다시 로그인한 뒤 녹음해 주세요.";
+    case 403:
+      return "요청 인증이 만료되었어요. 페이지를 새로고침한 뒤 다시 녹음해 주세요.";
+    case 429:
+      return "음성 변환 요청 횟수 제한에 도달했어요. 잠시 후 다시 시도해 주세요.";
+    case 413:
+      return "녹음 파일이 너무 커요. 5MiB 이하가 되도록 더 짧게 녹음해 주세요.";
+    case 415:
+      return "서버에서 지원하지 않는 녹음 형식이에요. 다른 브라우저에서 다시 녹음해 주세요.";
+    case 503:
+      return "서버를 일시적으로 사용할 수 없어 변환이 중단되었어요. 잠시 후 다시 시도해 주세요.";
+    case 400:
+      return "녹음 파일을 확인할 수 없어요. 새로 녹음한 뒤 다시 변환해 주세요.";
+    case 502:
+      return "음성 변환 서비스에서 답을 받지 못했어요. 잠시 후 다시 시도해 주세요.";
+    default:
+      return "서버에서 음성을 변환하지 못했어요. 잠시 후 다시 시도해 주세요.";
+  }
+}
+
+async function transcribeLocalRecording() {
+  if (activeRecording || microphoneTestInFlight || transcriptionRequest) return;
+  if (!recordedBlob || !recordedBlob.size) {
+    showTranscriptionStatus("먼저 목소리를 녹음하고 녹음을 종료해 주세요.", true);
+    return;
+  }
+  if (recordedBlob.size > MAX_TRANSCRIPTION_BYTES) {
+    showTranscriptionStatus(transcriptionErrorMessage(413), true);
+    return;
+  }
+  const filename = recordingUploadFilename(recordedBlob);
+  if (!filename) {
+    showTranscriptionStatus("이 녹음의 형식을 확인할 수 없거나 지원하지 않아요. 다른 브라우저에서 다시 녹음해 주세요.", true);
+    return;
+  }
+  if (typeof FormData !== "function" || typeof fetch !== "function" || typeof AbortController !== "function") {
+    showTranscriptionStatus("이 브라우저는 음성 변환 요청을 지원하지 않아요. 브라우저를 업데이트해 주세요.", true);
+    return;
+  }
+
+  clearTranscription();
+  const request = { blob: recordedBlob, controller: new AbortController(), timeout: null, timedOut: false };
+  // 첫 await 전에 요청 상태를 저장해 빠른 연속 클릭도 한 번만 전송합니다.
+  transcriptionRequest = request;
+  const isCurrent = () => transcriptionRequest === request && recordedBlob === request.blob;
+  let receivedResponse = false;
+  showTranscriptionStatus("변환 중...");
+  updateRecordingControls();
+  try {
+    const formData = new FormData();
+    // 파일명을 명시하지 않으면 확장자가 없는 'blob'이 되어 서버에서 거부됩니다.
+    formData.append("audio", request.blob, filename);
+    request.timeout = setTimeout(() => {
+      if (!isCurrent()) return;
+      request.timedOut = true;
+      request.controller.abort();
+    }, TRANSCRIPTION_TIMEOUT_MS);
+    const response = await fetch("/api/transcribe", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
+      // multipart의 Content-Type과 boundary는 브라우저가 자동으로 붙입니다.
+      body: formData,
+      signal: request.controller.signal,
+    });
+    if (!isCurrent()) return;
+    receivedResponse = true;
+    if (request.timedOut) {
+      showTranscriptionStatus("변환 응답이 늦어 요청을 중단했어요. 잠시 후 다시 시도해 주세요.", true);
+      return;
+    }
+    if (!response.ok) {
+      showTranscriptionStatus(transcriptionErrorMessage(response.status), true);
+      transcriptionLogin.hidden = response.status !== 401;
+      return;
+    }
+    const data = await response.json();
+    if (!isCurrent()) return;
+    if (request.timedOut) {
+      showTranscriptionStatus("변환 응답이 늦어 요청을 중단했어요. 잠시 후 다시 시도해 주세요.", true);
+      return;
+    }
+    if (!data || typeof data.text !== "string" || !data.text.trim()) {
+      showTranscriptionStatus("변환된 영어 문장을 받지 못했어요. 다시 녹음하거나 잠시 후 다시 시도해 주세요.", true);
+      return;
+    }
+    // 서버 응답을 HTML로 해석하지 않으며, 텍스트 채팅 입력·이력도 변경하지 않습니다.
+    transcriptionText.textContent = data.text.trim();
+    transcriptionResult.hidden = false;
+    showTranscriptionStatus("음성을 텍스트로 변환했어요. 아래 영어 문장을 확인해 주세요.");
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (request.timedOut || error?.name === "AbortError") {
+      showTranscriptionStatus("변환 응답이 늦어 요청을 중단했어요. 잠시 후 다시 시도해 주세요.", true);
+    } else if (!receivedResponse) {
+      showTranscriptionStatus("네트워크 연결 오류로 변환 결과를 받지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.", true);
+    } else {
+      showTranscriptionStatus("서버의 변환 응답을 읽을 수 없어요. 잠시 후 다시 시도해 주세요.", true);
+    }
+  } finally {
+    clearTimeout(request.timeout);
+    if (transcriptionRequest === request) {
+      transcriptionRequest = null;
+      updateRecordingControls();
+    }
+  }
+}
+
 recordStartButton.addEventListener("click", startLocalRecording);
 recordStopButton.addEventListener("click", () => stopLocalRecording());
 recordPlayButton.addEventListener("click", playLocalRecording);
 recordClearButton.addEventListener("click", () => clearLocalRecording());
+recordTranscribeButton.addEventListener("click", transcribeLocalRecording);
 recordingAudio.addEventListener("play", () => {
   if (recordingObjectUrl && !activeRecording) showRecordingStatus("녹음 재생 중입니다.");
 });
