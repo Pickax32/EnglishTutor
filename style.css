@@ -122,8 +122,20 @@ h1 > span { color: var(--accent); }
 .recording-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .recording-title { margin: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.7; }
 .recording-time { flex-shrink: 0; color: var(--muted); font-size: 12px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.auto-stt-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }
+.auto-stt-option { display: flex; align-items: center; gap: 10px; min-height: 44px; color: var(--text); font-size: 13px; cursor: pointer; }
+.auto-stt-option input { flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent); }
+.auto-stt-option input:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.auto-chat-option { grid-column: 1 / -1; }
+.auto-speech-option { grid-column: 1 / -1; }
+.auto-stt-controls > p { grid-column: 1 / -1; }
+.auto-stt-status { color: var(--accent); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.auto-stt-status.is-error { color: #f1c3a8; }
 .recording-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
 .recording-button { min-width: 0; min-height: 44px; padding: 10px 8px; border: 1px solid #4a5a43; border-radius: 9px; background: var(--surface-soft); color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.5; cursor: pointer; touch-action: manipulation; overflow-wrap: anywhere; }
+.recording-toggle-button { grid-column: 1 / -1; min-height: 52px; border-color: #789569; color: var(--accent); font-size: 14px; }
+.recording-toggle-button[data-state="recording"] { border-color: #d4937f; background: #362b24; color: #f1c3a8; }
+.recording-toggle-button[aria-busy="true"] { cursor: wait; }
 .recording-start-button { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
 .recording-clear-button { color: var(--muted); }
 .recording-button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }

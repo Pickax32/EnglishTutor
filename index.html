@@ -81,7 +81,7 @@
             </div>
 
             <div class="conversation-controls">
-              <p class="speech-note" id="speech-note">AI 답변의 답변 듣기를 누르면 영어로 읽어줘요. 읽기 중지로 멈출 수 있어요.</p>
+              <p class="speech-note" id="speech-note">답변 듣기를 누르면 영어로 읽어줘요. 자동 읽기는 세 옵션을 켜고 시작한 새 녹음에만 적용돼요. 읽기 중지로 멈출 수 있어요.</p>
               <p class="speech-status" id="speech-status" role="status" aria-live="polite" aria-atomic="true"></p>
               <button class="start-button" id="start-conversation" type="button" aria-describedby="conversation-note" aria-controls="chat-form">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -103,17 +103,29 @@
                   <h3 class="recording-title" id="recording-title">내 목소리 녹음</h3>
                   <span class="recording-time" id="recording-time" aria-label="녹음 시간" aria-live="off">0 / 15초</span>
                 </div>
+                <div class="auto-stt-controls">
+                  <label class="auto-stt-option" for="auto-stt-mode"><input id="auto-stt-mode" type="checkbox" autocomplete="off" aria-describedby="auto-stt-note">자동 STT (테스트)</label>
+                  <button class="recording-button" id="cancel-auto-stt" type="button" aria-controls="recording-controls" disabled>자동 처리 취소</button>
+                  <label class="auto-stt-option auto-chat-option" for="auto-chat-mode"><input id="auto-chat-mode" type="checkbox" autocomplete="off" aria-describedby="auto-chat-note" disabled>STT 후 AI 자동 전송</label>
+                  <label class="auto-stt-option auto-speech-option" for="auto-speech-mode"><input id="auto-speech-mode" type="checkbox" autocomplete="off" aria-describedby="auto-speech-note" disabled>AI 답변 자동 읽기</label>
+                  <p class="recording-note" id="auto-stt-note">기본 OFF입니다. ON으로 선택하면 마이크 토글로 시작한 녹음이 완료된 뒤 음성이 서버로 전송되어 텍스트로 변환됩니다. 자동 전송과 자동 읽기는 각각 선택해야 해요.</p>
+                  <p class="recording-note" id="auto-chat-note">자동 전송은 기본 OFF이며 자동 STT가 ON일 때 선택할 수 있어요. 두 옵션을 켜고 새로 녹음하면 STT와 AI 채팅 API가 호출되어 비용이 발생할 수 있어요. 작성 중인 채팅 문장이 있으면 시작하지 않아요.</p>
+                  <p class="recording-note" id="auto-speech-note">자동 읽기는 기본 OFF이며 위 두 옵션이 ON일 때 선택할 수 있어요. 새 AI 답변을 화면에 표시한 뒤 영어로 읽어요. 재생되지 않으면 답변 듣기를 직접 눌러 주세요. 다음 녹음은 마이크 버튼으로 시작하세요.</p>
+                  <p class="auto-stt-status" id="auto-stt-status" role="status" aria-live="polite" aria-atomic="true">자동 STT OFF · 변환 버튼을 눌러 수동으로 변환해요.</p>
+                </div>
                 <div class="recording-buttons">
+                  <button class="recording-button recording-toggle-button" id="toggle-recording" type="button" data-state="idle" aria-pressed="false" aria-busy="false" aria-describedby="recording-toggle-note recording-status">마이크로 녹음 시작</button>
                   <button class="recording-button recording-start-button" id="start-recording" type="button" aria-describedby="recording-note recording-status">녹음 시작</button>
                   <button class="recording-button" id="stop-recording" type="button" disabled>녹음 종료</button>
                   <button class="recording-button" id="play-recording" type="button" aria-controls="recording-playback" disabled>녹음 재생</button>
                   <button class="recording-button recording-clear-button" id="clear-recording" type="button" disabled>녹음 지우기</button>
                   <button class="recording-button transcription-button" id="transcribe-recording" type="button" aria-controls="transcription-result" aria-describedby="transcription-note transcription-status" aria-busy="false" disabled>음성을 텍스트로 변환</button>
                 </div>
-                <p class="recording-note" id="recording-note">최대 15초 · 녹음과 재생은 이 화면에서 처리해요. 변환 버튼을 누를 때만 음성이 서버로 전송돼요. 새 녹음을 시작하거나 화면을 나가면 녹음과 변환 결과가 지워져요.</p>
+                <p class="recording-note" id="recording-toggle-note">마이크 버튼을 한 번 누르면 녹음을 시작하고, 다시 누르면 종료해요. 시작·종료 처리 중에는 잠시 기다려 주세요.</p>
+                <p class="recording-note" id="recording-note">최대 15초 · 자동 STT OFF에서는 변환 버튼을 누를 때만 음성이 서버로 전송돼요. ON에서는 마이크 토글로 시작한 녹음을 완료하면 자동으로 전송해요. 새 녹음을 시작하거나 화면을 나가면 녹음과 변환 결과가 지워져요.</p>
                 <p class="recording-status" id="recording-status" role="status" aria-live="polite" aria-atomic="true">녹음 시작을 눌러 내 목소리를 연습해 보세요.</p>
                 <audio class="recording-playback" id="recording-playback" controls preload="metadata" aria-label="녹음한 내 목소리" hidden></audio>
-                <p class="transcription-note" id="transcription-note">녹음이 끝나면 변환 버튼을 눌러 영어 문장을 확인하세요. 변환된 문장은 채팅으로 자동 전송되지 않아요.</p>
+                <p class="transcription-note" id="transcription-note">수동 녹음은 종료 후 변환 버튼을 누르세요. 자동 STT만 선택하면 텍스트 변환까지만 하고, AI 자동 전송도 선택하면 채팅으로 보내요. 자동 읽기까지 선택한 새 토글 녹음은 AI 답변을 영어로 읽어요.</p>
                 <p class="transcription-status" id="transcription-status" role="status" aria-live="polite" aria-atomic="true"></p>
                 <a class="transcription-login" id="transcription-login" href="/login" hidden>다시 로그인하기</a>
                 <div class="transcription-result" id="transcription-result" aria-labelledby="transcription-title" hidden>
