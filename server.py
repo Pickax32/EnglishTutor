@@ -151,7 +151,7 @@ CHAT_ERROR = "AI 답변을 받지 못했습니다. 잠시 후 다시 시도해 �
 MAX_HISTORY_TURNS = 5
 # 최근 5쌍(10개)에 새 사용자 문장 하나를 더한 요청까지 받습니다.
 MAX_REQUEST_MESSAGES = MAX_HISTORY_TURNS * 2 + 1
-MAX_USER_MESSAGE_CHARS = 500
+MAX_USER_MESSAGE_CHARS = 6000
 MAX_ASSISTANT_MESSAGE_CHARS = 2000
 
 # STT는 텍스트 대화와 별도의 업로드·요청 한도를 사용합니다.

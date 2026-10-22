@@ -16,7 +16,8 @@ let conversationStarted = false;
 let inFlight = false;
 let activeChatRequest = null;
 const MAX_HISTORY_TURNS = 5;
-const MAX_USER_MESSAGE_LENGTH = 500;
+// 3분 × 분당 200단어 × 단어/공백 평균 7자(약 4,200자)에 여유를 둡니다.
+const MAX_USER_MESSAGE_LENGTH = 6000;
 const MAX_ASSISTANT_MESSAGE_LENGTH = 2000;
 
 // 새로고침하면 초기화됩니다. 화면의 고정 인사말은 이력에 넣지 않습니다.
@@ -30,11 +31,11 @@ function showNotice(message, isError = false) {
 
 function updateSendButton() {
   const message = messageInput.value.trim();
-  sendButton.disabled = !conversationStarted || inFlight || Boolean(autoSttJob?.sendToChat) || message.length === 0;
+  sendButton.disabled = !conversationStarted || inFlight || autoSttJob !== null || message.length === 0;
 }
 
 function setLoading(isLoading) {
-  messageInput.disabled = isLoading || Boolean(autoSttJob?.sendToChat);
+  messageInput.disabled = isLoading || autoSttJob !== null;
   chatForm.setAttribute("aria-busy", String(isLoading));
   sendButton.textContent = isLoading ? "Loading..." : "Send";
   updateSendButton();
@@ -177,14 +178,12 @@ microphoneTestButton.addEventListener("click", testMicrophone);
 
 // 녹음·재생은 로컬에서 처리합니다. 자동 STT는 사용자가 선택한 토글 녹음에만 적용합니다.
 const recordingControls = document.querySelector("#recording-controls");
-const recordStartButton = document.querySelector("#start-recording");
 const recordToggleButton = document.querySelector("#toggle-recording");
+const recordToggleLabel = document.querySelector("#recording-toggle-label");
 const autoSttMode = document.querySelector("#auto-stt-mode");
-const autoChatMode = document.querySelector("#auto-chat-mode");
 const autoSpeechMode = document.querySelector("#auto-speech-mode");
 const autoSttStatus = document.querySelector("#auto-stt-status");
 const cancelAutoSttButton = document.querySelector("#cancel-auto-stt");
-const recordStopButton = document.querySelector("#stop-recording");
 const recordPlayButton = document.querySelector("#play-recording");
 const recordClearButton = document.querySelector("#clear-recording");
 const recordTranscribeButton = document.querySelector("#transcribe-recording");
@@ -196,7 +195,9 @@ const transcriptionResult = document.querySelector("#transcription-result");
 const transcriptionText = document.querySelector("#transcription-text");
 const transcriptionUseButton = document.querySelector("#use-transcription");
 const transcriptionLogin = document.querySelector("#transcription-login");
-const MAX_RECORDING_MS = 15000;
+const MAX_RECORDING_MS = 180000;
+// 형식은 브라우저가 고릅니다. 128kbps × 180초는 약 2.88MB이며 실제 Blob도 검사합니다.
+const RECORDING_AUDIO_BITS_PER_SECOND = 128000;
 const MAX_TRANSCRIPTION_BYTES = 5 * 1024 * 1024;
 const TRANSCRIPTION_TIMEOUT_MS = 45000;
 let activeRecording = null;
@@ -214,25 +215,24 @@ function showRecordingStatus(message, isError = false) {
 function updateRecordingControls() {
   const busy = activeRecording !== null;
   const automaticBusy = autoSttJob !== null;
-  // 수동 버튼과 토글 버튼이 같은 세션 상태를 사용합니다. Blob이 있어야 완료입니다.
+  // 마이크 버튼은 기존 세션 상태를 사용합니다. Blob이 있어야 완료입니다.
   const phase = activeRecording?.phase ?? (automaticBusy
     ? (["transcribing", "chatting", "speaking"].includes(autoSttJob.phase) ? autoSttJob.phase : "preparing")
     : (recordedBlob ? "complete" : "idle"));
   const toggleLabels = {
-    idle: "마이크로 녹음 시작", requesting: "마이크 준비 중...",
-    recording: "마이크로 녹음 종료", stopping: "녹음 종료 처리 중...",
+    idle: "녹음 시작", requesting: "마이크 준비 중...",
+    recording: "녹음 중 · 눌러서 종료", stopping: "녹음 종료 처리 중...",
     complete: "녹음 완료 · 다시 녹음",
     preparing: "자동 STT 준비 중...", transcribing: "자동 STT 변환 중...",
     chatting: "AI 답변 기다리는 중...",
     speaking: "AI 답변 읽는 중...",
   };
-  recordToggleButton.textContent = toggleLabels[phase];
+  recordToggleLabel.textContent = toggleLabels[phase];
+  recordToggleButton.setAttribute("aria-label", toggleLabels[phase]);
   recordToggleButton.disabled = microphoneTestInFlight || phase === "requesting" || phase === "stopping" || (automaticBusy && !busy);
   recordToggleButton.setAttribute("data-state", phase);
   recordToggleButton.setAttribute("aria-pressed", String(phase === "recording"));
   recordToggleButton.setAttribute("aria-busy", String(["requesting", "stopping", "preparing", "transcribing", "chatting", "speaking"].includes(phase)));
-  recordStartButton.disabled = busy || microphoneTestInFlight || automaticBusy;
-  recordStopButton.disabled = !busy || activeRecording.phase === "stopping";
   recordPlayButton.disabled = busy || !recordingObjectUrl || automaticBusy;
   recordClearButton.disabled = busy || !recordingObjectUrl;
   recordTranscribeButton.disabled = busy || microphoneTestInFlight || !recordedBlob || transcriptionRequest !== null || automaticBusy;
@@ -240,8 +240,7 @@ function updateRecordingControls() {
   recordTranscribeButton.setAttribute("aria-busy", String(transcriptionRequest !== null));
   microphoneTestButton.disabled = microphoneTestInFlight || busy || automaticBusy;
   cancelAutoSttButton.disabled = !automaticBusy;
-  autoChatMode.disabled = !autoSttMode.checked;
-  autoSpeechMode.disabled = !autoSttMode.checked || !autoChatMode.checked;
+  autoSpeechMode.disabled = !autoSttMode.checked;
   recordingControls.classList.toggle("is-recording", activeRecording?.phase === "recording");
   recordingControls.setAttribute("aria-busy", String((busy && activeRecording.phase !== "recording") || (automaticBusy && !busy)));
   setLoading(inFlight);
@@ -262,8 +261,10 @@ function clearRecordingTimers(session) {
 }
 
 function updateRecordingClock(session) {
-  const seconds = Math.min(15, Math.floor((performance.now() - session.startedAt) / 1000));
-  recordingTime.textContent = `${seconds} / 15초`;
+  const seconds = Math.max(0, Math.min(MAX_RECORDING_MS / 1000, Math.floor((performance.now() - session.startedAt) / 1000)));
+  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const remainingSeconds = String(seconds % 60).padStart(2, "0");
+  recordingTime.textContent = `${minutes}:${remainingSeconds} / 03:00`;
 }
 
 function releaseRecordingPlayback() {
@@ -346,7 +347,7 @@ function finishRecording(session) {
     recordingAudio.load();
     recordedBlob = blob;
     showRecordingStatus(session.stopReason === "limit"
-      ? "15초가 되어 자동으로 녹음을 종료했습니다. 녹음을 재생할 수 있어요."
+      ? "03:00이 되어 자동으로 녹음을 종료했습니다. 녹음을 재생할 수 있어요."
       : "녹음이 종료되었습니다. 녹음 재생을 눌러 들어보세요.");
     result = { ok: true, blob, error: null };
   } catch {
@@ -404,7 +405,7 @@ async function startLocalRecording() {
     return { ok: false, completion: null, error: "speech_stop_failed" };
   }
   releaseRecordingPlayback();
-  recordingTime.textContent = "0 / 15초";
+  recordingTime.textContent = "00:00 / 03:00";
   const session = {
     phase: "requesting", stream: null, recorder: null, chunks: [],
     timeout: null, clock: null, startedAt: 0, stopReason: "manual", discarded: false,
@@ -423,7 +424,7 @@ async function startLocalRecording() {
       return { ok: false, completion: session.completion, error: "cancelled" };
     }
     session.stream = stream;
-    const recorder = new MediaRecorder(stream);
+    const recorder = new MediaRecorder(stream, { audioBitsPerSecond: RECORDING_AUDIO_BITS_PER_SECOND });
     session.recorder = recorder;
     recorder.ondataavailable = (event) => {
       if (activeRecording !== session || session.discarded) return;
@@ -446,9 +447,9 @@ async function startLocalRecording() {
       if (activeRecording !== session) return;
       updateRecordingClock(session);
       if (performance.now() - session.startedAt >= MAX_RECORDING_MS) stopLocalRecording("limit");
-    }, 250);
+    }, 1000);
     updateRecordingControls();
-    showRecordingStatus("녹음 중입니다. 최대 15초까지 녹음해요. 끝나면 녹음 종료를 눌러 주세요.");
+    showRecordingStatus("녹음 중입니다. 최대 03:00까지 녹음해요. 마이크 버튼을 다시 누르면 종료돼요.");
     return { ok: true, completion: session.completion, error: null };
   } catch (error) {
     if (activeRecording !== session) return { ok: false, completion: session.completion, error: "cancelled" };
@@ -466,23 +467,22 @@ function toggleLocalRecording() {
   }
   if (autoSttJob) return;
   const automatic = autoSttMode.checked === true;
-  const sendToChat = automatic && autoChatMode.checked === true;
-  if (sendToChat && messageInput.value.length > 0) {
+  if (automatic && messageInput.value.length > 0) {
     showAutoSttStatus("채팅 입력창에 작성 중인 문장이 있어요. 먼저 보내거나 비운 뒤 자동 대화를 시작해 주세요.", true);
     messageInput.focus();
     return;
   }
-  if (sendToChat && inFlight) {
+  if (automatic && inFlight) {
     showAutoSttStatus("진행 중인 채팅이 끝난 뒤 자동 대화를 시작해 주세요.", true);
     return;
   }
   const started = startLocalRecording();
   // startLocalRecording은 권한을 기다리기 전에 세션을 만듭니다. 이 토글 녹음만 추적합니다.
   if (automatic && activeRecording) {
-    const job = { session: activeRecording, phase: "recording", blob: null, request: null, started: false, attempted: false, sendToChat, chatAttempted: false,
-      readAnswer: sendToChat && autoSpeechMode.checked === true, answerEntry: null, speechAttempted: false };
+    const job = { session: activeRecording, phase: "recording", blob: null, request: null, started: false, attempted: false, chatAttempted: false,
+      readAnswer: autoSpeechMode.checked === true, answerEntry: null, speechAttempted: false };
     autoSttJob = job;
-    showAutoSttStatus("자동 STT 대기 · 녹음을 완료하면 음성을 서버로 전송해요.");
+    showAutoSttStatus("자동 대화 대기 · 녹음 완료 후 STT와 AI 전송을 순서대로 실행해요.");
     updateRecordingControls();
     job.finished = runAutomaticStt(job);
   }
@@ -497,7 +497,6 @@ function showAutoSttStatus(message, isError = false) {
 
 function isCurrentAutomaticStt(job) {
   return autoSttJob === job && autoSttMode.checked === true && document.visibilityState !== "hidden"
-    && (!job.sendToChat || autoChatMode.checked === true)
     && (!job.readAnswer || autoSpeechMode.checked === true);
 }
 
@@ -545,13 +544,9 @@ async function runAutomaticStt(job) {
       showAutoSttStatus("자동 STT를 완료하지 못했어요. 변환 안내를 확인해 주세요. 자동 재시도는 하지 않아요.", true);
       return result.ok ? { ok: false, text: null, error: "empty_transcription" } : result;
     }
-    if (!job.sendToChat) {
-      showAutoSttStatus("자동 STT 완료 · 아래 영어 문장을 확인하세요. 채팅으로 자동 전송하지 않아요.");
-      return result;
-    }
     const text = result.text.trim();
     if (Array.from(text).length > MAX_USER_MESSAGE_LENGTH) {
-      showAutoSttStatus("변환 문장이 500자를 넘어 AI에게 보내지 않았어요. 문장을 줄인 뒤 직접 전송해 주세요.", true);
+      showAutoSttStatus(`변환 문장이 ${MAX_USER_MESSAGE_LENGTH.toLocaleString()}자를 넘어 AI에게 보내지 않았어요. 문장을 줄인 뒤 직접 전송해 주세요. 자동 재시도는 하지 않아요.`, true);
       return { ok: false, text, error: "message_too_long" };
     }
     if (messageInput.value.length > 0) {
@@ -597,7 +592,7 @@ async function runAutomaticStt(job) {
 function clearLocalRecording(message = "녹음을 지웠습니다. 다시 녹음할 수 있어요.") {
   if (activeRecording) discardRecordingSession(activeRecording);
   releaseRecordingPlayback();
-  recordingTime.textContent = "0 / 15초";
+  recordingTime.textContent = "00:00 / 03:00";
   showRecordingStatus(message);
   updateRecordingControls();
 }
@@ -893,7 +888,7 @@ function useTranscriptionInChat() {
   messageInput.dispatchEvent(new Event("input", { bubbles: true }));
   messageInput.focus();
   if (Array.from(text).length > MAX_USER_MESSAGE_LENGTH) {
-    showNotice("문장이 500자를 넘어요. 입력창에서 500자 이내로 줄인 뒤 Send를 눌러 주세요.", true);
+    showNotice(`문장이 ${MAX_USER_MESSAGE_LENGTH.toLocaleString()}자를 넘어요. 입력창에서 줄인 뒤 Send를 눌러 주세요.`, true);
   } else {
     showNotice("채팅 입력창에 넣었어요. 문장을 수정한 뒤 Send를 눌러 보내세요.");
   }
@@ -1070,36 +1065,24 @@ async function transcribeLocalRecording(ownerJob = null) {
   }
 }
 
-recordStartButton.addEventListener("click", startLocalRecording);
 recordToggleButton.addEventListener("click", toggleLocalRecording);
-recordStopButton.addEventListener("click", () => stopLocalRecording());
 recordPlayButton.addEventListener("click", playLocalRecording);
 recordClearButton.addEventListener("click", () => clearLocalRecording());
 recordTranscribeButton.addEventListener("click", () => transcribeLocalRecording());
 transcriptionUseButton.addEventListener("click", useTranscriptionInChat);
 // 새로고침·브라우저 입력 복원 뒤에도 자동 업로드는 사용자가 다시 선택해야 합니다.
 autoSttMode.checked = false;
-autoChatMode.checked = false;
 autoSpeechMode.checked = false;
 autoSttMode.addEventListener("change", () => {
   if (!autoSttMode.checked && autoSttJob) clearLocalRecording("자동 STT 모드를 해제해 작업을 취소했습니다.");
-  if (!autoSttMode.checked) { autoChatMode.checked = false; autoSpeechMode.checked = false; }
+  if (!autoSttMode.checked) autoSpeechMode.checked = false;
   showAutoSttStatus(autoSttMode.checked
-    ? "자동 STT ON · 마이크 토글로 새 녹음을 시작하면 완료 후 음성을 서버로 전송해요."
+    ? "자동 STT ON · 새 녹음 완료 후 STT → AI 전송을 자동 실행해요. API 비용이 발생할 수 있어요."
     : "자동 STT OFF · 변환 버튼을 눌러 수동으로 변환해요.");
   updateRecordingControls();
 });
-autoChatMode.addEventListener("change", () => {
-  if (!autoSttMode.checked) autoChatMode.checked = false;
-  if (!autoChatMode.checked && autoSttJob?.sendToChat) clearLocalRecording("AI 자동 전송을 해제해 작업을 취소했습니다.");
-  if (!autoChatMode.checked) autoSpeechMode.checked = false;
-  showAutoSttStatus(autoChatMode.checked
-    ? "AI 자동 전송 ON · 다음 새 토글 녹음부터 STT와 AI 채팅 요청이 발생할 수 있어요."
-    : (autoSttMode.checked ? "AI 자동 전송 OFF · 자동 STT는 텍스트 변환까지만 해요." : "자동 STT OFF · 변환 버튼을 눌러 수동으로 변환해요."));
-  updateRecordingControls();
-});
 autoSpeechMode.addEventListener("change", () => {
-  if (!autoSttMode.checked || !autoChatMode.checked) autoSpeechMode.checked = false;
+  if (!autoSttMode.checked) autoSpeechMode.checked = false;
   if (!autoSpeechMode.checked && autoSttJob?.readAnswer) clearLocalRecording("AI 답변 자동 읽기를 해제해 작업을 취소했습니다.");
   showAutoSttStatus(autoSpeechMode.checked
     ? "AI 답변 자동 읽기 ON · 다음 새 토글 녹음부터 STT, AI 채팅, 영어 읽기를 순서대로 실행해요."
@@ -1152,8 +1135,8 @@ updateRecordingControls();
  * @returns {Promise<{ok: boolean, reply: string|null, error: string|null}>}
  */
 async function sendChatMessage(text, ownerJob = null) {
-  if (ownerJob && (!ownerJob.sendToChat || !isCurrentAutomaticStt(ownerJob))) return { ok: false, reply: null, error: "cancelled" };
-  if (autoSttJob?.sendToChat && autoSttJob !== ownerJob) return { ok: false, reply: null, error: "busy" };
+  if (ownerJob && !isCurrentAutomaticStt(ownerJob)) return { ok: false, reply: null, error: "cancelled" };
+  if (autoSttJob && autoSttJob !== ownerJob) return { ok: false, reply: null, error: "busy" };
   if (!conversationStarted) return { ok: false, reply: null, error: "not_started" };
   if (inFlight) return { ok: false, reply: null, error: "busy" };
   if (ownerJob && messageInput.value.length > 0) return { ok: false, reply: null, error: "draft_present" };
@@ -1170,7 +1153,7 @@ async function sendChatMessage(text, ownerJob = null) {
     return { ok: false, reply: null, error: "empty_message" };
   }
   if (Array.from(message).length > MAX_USER_MESSAGE_LENGTH) {
-    showNotice("문장은 500자 이내로 입력해 주세요.", true);
+    showNotice(`문장은 ${MAX_USER_MESSAGE_LENGTH.toLocaleString()}자 이내로 입력해 주세요.`, true);
     messageInput.focus();
     return { ok: false, reply: null, error: "message_too_long" };
   }
