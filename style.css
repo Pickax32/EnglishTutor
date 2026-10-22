@@ -102,6 +102,11 @@ h1 > span { color: var(--accent); }
 
 .conversation-controls { padding: 0 30px 20px; }
 .speech-note { margin-bottom: 10px; color: var(--muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.speech-rate-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; margin-bottom: 12px; }
+.speech-rate-control label { color: var(--text); font-size: 13px; }
+.speech-rate-control select { min-height: 44px; padding: 8px 12px; border: 1px solid #4a5a43; border-radius: 9px; background: var(--surface-soft); color: var(--text); font: inherit; font-size: 13px; }
+.speech-rate-control select:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.speech-rate-note { grid-column: 1 / -1; color: var(--muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
 .speech-status { color: var(--accent); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .speech-status:not(:empty) { margin-bottom: 12px; padding: 10px 12px; border: 1px solid #485d3e; border-radius: 9px; background: #243321; }
 .speech-status.is-error { border-color: #79574b; background: #362b24; color: #f1c3a8; }

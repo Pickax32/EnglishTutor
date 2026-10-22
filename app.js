@@ -618,6 +618,9 @@ async function playLocalRecording() {
 
 // AI 답변만 브라우저 음성으로 읽습니다. 자동 읽기는 동의한 작업의 새 답변에만 적용합니다.
 const speechStatus = document.querySelector("#speech-status");
+const speechRateSelect = document.querySelector("#speech-rate");
+// 브라우저가 이전 폼 값을 복원해도 새 화면의 기본 속도는 1.0배입니다.
+speechRateSelect.value = "1.0";
 const speechSynth = window.speechSynthesis;
 const speechSupported = Boolean(speechSynth
   && typeof speechSynth.speak === "function"
@@ -649,6 +652,14 @@ async function playAutomaticAnswer(job, reply) {
 function showSpeechStatus(message, isError = false) {
   speechStatus.textContent = message;
   speechStatus.classList.toggle("is-error", isError);
+}
+
+function selectedSpeechRate() {
+  switch (speechRateSelect.value) {
+    case "0.8": return 0.8;
+    case "1.2": return 1.2;
+    default: return 1.0;
+  }
 }
 
 function refreshSpeechVoices() {
@@ -753,6 +764,8 @@ function speakAnswer(entry, ownerJob = null) {
     recordingAudio.pause();
     const utterance = new SpeechSynthesisUtterance(entry.text);
     utterance.lang = "en-US";
+    // 새 발화를 만들 때만 읽으므로 선택을 바꿔도 현재 재생은 변하지 않습니다.
+    utterance.rate = selectedSpeechRate();
     const voice = chooseEnglishVoice();
     if (voice) utterance.voice = voice;
     session = { entry, utterance, ownerJob, started: false, startTimeout: null, completion: null, resolveCompletion: null };

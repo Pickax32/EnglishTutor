@@ -82,6 +82,15 @@
 
             <div class="conversation-controls">
               <p class="speech-note" id="speech-note">답변 듣기를 누르면 영어로 읽어줘요. 자동 읽기는 세 옵션을 켜고 시작한 새 녹음에만 적용돼요. 읽기 중지로 멈출 수 있어요.</p>
+              <div class="speech-rate-control">
+                <label for="speech-rate">영어 읽기 속도</label>
+                <select id="speech-rate" aria-describedby="speech-rate-note" autocomplete="off">
+                  <option value="0.8">0.8배</option>
+                  <option value="1.0" selected>1.0배</option>
+                  <option value="1.2">1.2배</option>
+                </select>
+                <p class="speech-rate-note" id="speech-rate-note">속도를 바꾸면 다음 재생부터 적용돼요. 현재 읽고 있는 답변은 그대로 유지돼요.</p>
+              </div>
               <p class="speech-status" id="speech-status" role="status" aria-live="polite" aria-atomic="true"></p>
               <button class="start-button" id="start-conversation" type="button" aria-describedby="conversation-note" aria-controls="chat-form">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
