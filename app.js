@@ -21,6 +21,58 @@ const MAX_ASSISTANT_MESSAGE_LENGTH = 2000;
 // 성공한 user/assistant 대화 쌍만 순서대로 저장합니다.
 let conversationHistory = [];
 
+const englishLevelSelect = document.querySelector("#english-level");
+const conversationTopicSelect = document.querySelector("#conversation-topic");
+const learningSettingsStatus = document.querySelector("#learning-settings-status");
+const LEARNING_SETTINGS_KEY = "englishtutor.learningSettings";
+const DEFAULT_LEARNING_SETTINGS = Object.freeze({ difficulty: "intermediate", topic: "free" });
+const ENGLISH_LEVELS = new Set(["beginner", "intermediate", "advanced"]);
+const CONVERSATION_TOPICS = new Set(["free", "daily", "travel", "business"]);
+
+function normalizeLearningSettings(value) {
+  const settings = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    difficulty: ENGLISH_LEVELS.has(settings.difficulty) ? settings.difficulty : DEFAULT_LEARNING_SETTINGS.difficulty,
+    topic: CONVERSATION_TOPICS.has(settings.topic) ? settings.topic : DEFAULT_LEARNING_SETTINGS.topic,
+  };
+}
+
+function loadLearningSettings() {
+  try {
+    return normalizeLearningSettings(JSON.parse(window.localStorage.getItem(LEARNING_SETTINGS_KEY)));
+  } catch {
+    // 저장소 접근 제한이나 잘못된 JSON도 대화 시작을 막지 않습니다.
+    return { ...DEFAULT_LEARNING_SETTINGS };
+  }
+}
+
+let learningSettings = loadLearningSettings();
+// 대화와 함께 메모리에만 보관합니다. 실패·취소한 요청은 주제 전환 기준이 되지 않습니다.
+let lastSuccessfulTopic = null;
+
+function reflectLearningSettings() {
+  englishLevelSelect.value = learningSettings.difficulty;
+  conversationTopicSelect.value = learningSettings.topic;
+}
+
+function updateLearningSettings() {
+  learningSettings = normalizeLearningSettings({
+    difficulty: englishLevelSelect.value,
+    topic: conversationTopicSelect.value,
+  });
+  reflectLearningSettings();
+  try {
+    window.localStorage.setItem(LEARNING_SETTINGS_KEY, JSON.stringify(learningSettings));
+    learningSettingsStatus.textContent = "다음 채팅부터 적용돼요. 대화 내용은 유지돼요.";
+  } catch {
+    learningSettingsStatus.textContent = "현재 화면에는 적용돼요. 이 브라우저에서는 설정을 저장할 수 없어요.";
+  }
+}
+
+reflectLearningSettings();
+englishLevelSelect.addEventListener("change", updateLearningSettings);
+conversationTopicSelect.addEventListener("change", updateLearningSettings);
+
 function showNotice(message, isError = false) {
   connectionNotice.textContent = message;
   connectionNotice.classList.toggle("is-error", isError);
@@ -942,6 +994,9 @@ async function sendChatMessage(text, ownerJob = null) {
   }
 
   // 첫 await 전에 잠가서 Enter와 클릭이 겹쳐도 한 번만 요청합니다.
+  // 진행 중에 선택을 바꿔도 이 요청은 시작 시점의 설정을 끝까지 사용합니다.
+  const requestSettings = { ...learningSettings };
+  const previousTopic = lastSuccessfulTopic;
   const request = { ownerJob, controller: null, userMessage: null };
   activeChatRequest = request;
   inFlight = true;
@@ -966,7 +1021,7 @@ async function sendChatMessage(text, ownerJob = null) {
         "Accept": "application/json",
         "X-CSRF-Token": csrfToken,
       },
-      body: JSON.stringify({ messages: candidateMessages }),
+      body: JSON.stringify({ messages: candidateMessages, settings: requestSettings, previous_topic: previousTopic }),
       ...(request.controller ? { signal: request.controller.signal } : {}),
     });
     if (!isCurrent()) {
@@ -976,6 +1031,7 @@ async function sendChatMessage(text, ownerJob = null) {
 
     if (response.status === 401 || response.status === 403) {
       conversationHistory = [];
+      lastSuccessfulTopic = null;
       messageInput.value = "";
       chatMessages.replaceChildren();
       window.location.replace(response.status === 401 ? "/login" : "/");
@@ -1013,6 +1069,7 @@ async function sendChatMessage(text, ownerJob = null) {
 
     appendMessage("assistant", reply);
     conversationHistory = completedHistory;
+    lastSuccessfulTopic = requestSettings.topic;
     if (!ownerJob) messageInput.value = "";
     showNotice(ownerJob ? "" : "답변이 도착했어요.");
     return { ok: true, reply, error: null };

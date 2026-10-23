@@ -101,6 +101,27 @@
                 <p class="speech-rate-note" id="speech-rate-note">속도 변경은 다음 재생부터 적용돼요.</p>
               </div>
               <p class="speech-status" id="speech-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <details class="learning-settings" id="learning-settings">
+                <summary>학습 설정</summary>
+                <div class="learning-settings-grid">
+                  <label for="english-level">영어 난이도
+                    <select id="english-level" autocomplete="off" aria-describedby="learning-settings-status">
+                      <option value="beginner">초급</option>
+                      <option value="intermediate" selected>중급</option>
+                      <option value="advanced">고급</option>
+                    </select>
+                  </label>
+                  <label for="conversation-topic">학습 주제
+                    <select id="conversation-topic" autocomplete="off" aria-describedby="learning-settings-status">
+                      <option value="free" selected>자유회화</option>
+                      <option value="daily">일상생활</option>
+                      <option value="travel">여행 영어</option>
+                      <option value="business">비즈니스</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="learning-settings-status" id="learning-settings-status" role="status" aria-live="polite">다음 채팅부터 적용돼요. 대화 내용은 유지돼요.</p>
+              </details>
               <details class="text-entry" id="text-entry">
                 <summary>텍스트로 입력</summary>
                 <form class="chat-form" id="chat-form">

@@ -133,10 +133,15 @@ h1 > span { color: var(--accent); }
 .transcription-login:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .send-button:focus-visible, .brand:focus-visible, .chat-messages:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
 .chat-messages:focus-visible { outline-offset: -3px; }
-.text-entry { min-width: 0; margin-top: 14px; border-top: 1px solid var(--border); }
-.text-entry summary { min-height: 44px; padding: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.7; cursor: pointer; touch-action: manipulation; }
-.text-entry summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-.text-entry[open] summary { color: var(--accent); }
+.learning-settings, .text-entry { min-width: 0; margin-top: 14px; border-top: 1px solid var(--border); }
+.learning-settings summary, .text-entry summary { min-height: 44px; padding: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.7; cursor: pointer; touch-action: manipulation; }
+.learning-settings summary:focus-visible, .text-entry summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.learning-settings[open] summary, .text-entry[open] summary { color: var(--accent); }
+.learning-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+.learning-settings-grid label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; }
+.learning-settings-grid select { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid #4a5a43; border-radius: 9px; background: var(--surface-soft); color: var(--text); font: inherit; }
+.learning-settings-grid select:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.learning-settings-status { margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .chat-form { display: grid; gap: 9px; }
 .input-label { color: #d7e0d6; font-size: 12px; }
 .message-composer { display: flex; align-items: stretch; gap: 10px; }
@@ -172,7 +177,7 @@ h1 > span { color: var(--accent); }
 
 @media (hover: hover) {
   .recording-toggle-button:hover:not(:disabled), .voice-cancel-button:hover:not(:disabled) { border-color: var(--accent); }
-  .text-entry summary:hover { color: var(--accent); }
+  .learning-settings summary:hover, .text-entry summary:hover { color: var(--accent); }
   .speech-button:hover:not(:disabled) { border-color: var(--accent); background: #28372c; }
   .send-button:hover:not(:disabled) { background: #d2efbc; }
 }

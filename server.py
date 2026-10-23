@@ -147,12 +147,74 @@ CHAT_INSTRUCTIONS = (
     "Reply naturally in English in 1-2 short sentences, including exactly one follow-up question. "
     "Only correct grammar if the user explicitly asks for a correction."
 )
+# 브라우저는 선택값만 보냅니다. AI 지시는 검증된 선택에 대응하는 서버 문구로만 만듭니다.
+DIFFICULTY_INSTRUCTIONS = {
+    "beginner": (
+        "Use simple, common English words and very short, easy sentences. "
+        "Keep the single follow-up question easy to answer."
+    ),
+    "intermediate": "",
+    "advanced": (
+        "Use richer, precise English vocabulary and a thoughtful follow-up question "
+        "that invites deeper discussion, while keeping the reply brief and natural."
+    ),
+}
+TOPIC_INSTRUCTIONS = {
+    "free": "",
+    "daily": "Focus on realistic everyday situations such as routines, hobbies, meals, and plans.",
+    "travel": "Focus on realistic travel situations such as transport, accommodation, sightseeing, and asking for help.",
+    "business": "Focus on realistic workplace situations such as meetings, projects, schedules, and professional communication.",
+}
+TOPIC_PRIORITY_INSTRUCTIONS = (
+    "Use the currently selected topic as the main direction even if earlier conversation was about something else. "
+    "Still respond to the user's latest message and preserve relevant context; do not disregard or rewrite the conversation history."
+)
+TOPIC_CHANGE_INSTRUCTIONS = (
+    "The user has selected a different conversation topic for this turn. "
+    "Briefly and naturally transition toward the current topic instead of continuing questions tied to the previous topic, "
+    "while responding to the latest user message."
+)
+FREE_TOPIC_RETURN_INSTRUCTIONS = (
+    "The user has returned to free conversation. Let the latest user message guide the subject; "
+    "do not keep steering questions toward a topic selected earlier."
+)
 CHAT_ERROR = "AI 답변을 받지 못했습니다. 잠시 후 다시 시도해 주세요."
 MAX_HISTORY_TURNS = 5
 # 최근 5쌍(10개)에 새 사용자 문장 하나를 더한 요청까지 받습니다.
 MAX_REQUEST_MESSAGES = MAX_HISTORY_TURNS * 2 + 1
 MAX_USER_MESSAGE_CHARS = 6000
 MAX_ASSISTANT_MESSAGE_CHARS = 2000
+
+
+def chat_instructions_for_request(data):
+    settings = data.get("settings", {})
+    if not isinstance(settings, dict) or set(settings) - {"difficulty", "topic"}:
+        raise ValueError
+    difficulty = settings.get("difficulty", "intermediate")
+    topic = settings.get("topic", "free")
+    previous_topic = data.get("previous_topic")
+    if (
+        not isinstance(difficulty, str)
+        or difficulty not in DIFFICULTY_INSTRUCTIONS
+        or not isinstance(topic, str)
+        or topic not in TOPIC_INSTRUCTIONS
+        or (
+            previous_topic is not None
+            and (not isinstance(previous_topic, str) or previous_topic not in TOPIC_INSTRUCTIONS)
+        )
+    ):
+        raise ValueError
+
+    fragments = [CHAT_INSTRUCTIONS]
+    fragments.extend(filter(None, (DIFFICULTY_INSTRUCTIONS[difficulty], TOPIC_INSTRUCTIONS[topic])))
+    if topic != "free":
+        fragments.append(TOPIC_PRIORITY_INSTRUCTIONS)
+    if previous_topic is not None and previous_topic != topic:
+        fragments.append(TOPIC_CHANGE_INSTRUCTIONS)
+        if topic == "free":
+            fragments.append(FREE_TOPIC_RETURN_INSTRUCTIONS)
+    return " ".join(fragments)
+
 
 # STT는 텍스트 대화와 별도의 업로드·요청 한도를 사용합니다.
 TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
@@ -303,6 +365,11 @@ def chat():
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
         return jsonify({"error": "messages에 대화 목록을 보내 주세요."}), 400
+    try:
+        instructions = chat_instructions_for_request(data)
+    except ValueError:
+        # 클라이언트가 보낸 설정이나 원본 오류는 응답·로그에 반영하지 않습니다.
+        return jsonify({"error": "대화 설정이 올바르지 않습니다. 난이도와 주제를 다시 선택해 주세요."}), 400
 
     messages = data["messages"]
     if not 1 <= len(messages) <= MAX_REQUEST_MESSAGES:
@@ -342,7 +409,7 @@ def chat():
         with OpenAI(timeout=30.0, max_retries=0) as client:
             response = client.responses.create(
                 model="gpt-5.4-mini",
-                instructions=CHAT_INSTRUCTIONS,
+                instructions=instructions,
                 input=validated_messages,
                 store=False,
             )
