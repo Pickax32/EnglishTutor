@@ -14,6 +14,7 @@ Redis 저장소와 Lua 제한 검사는 실제로 실행하며 OpenAI만 Mock으
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 import importlib.util
 import io
+import json
 import logging
 import os
 from pathlib import Path
@@ -204,7 +205,10 @@ class RedisRateLimitTest(unittest.TestCase):
             mock_client.responses = MagicMock(spec_set=["create"])
             mock_client.__enter__.return_value = mock_client
             mock_client.__exit__.return_value = False
-            mock_client.responses.create.return_value = SimpleNamespace(output_text=MOCK_REPLY)
+            mock_client.responses.create.return_value = SimpleNamespace(
+                status="completed", output=[],
+                output_text=json.dumps({"reply": MOCK_REPLY, "correction": None}),
+            )
             mock_openai = MagicMock(name="OpenAI", return_value=mock_client)
             stack.enter_context(patch.object(openai, "OpenAI", mock_openai))
 
@@ -311,7 +315,7 @@ class RedisRateLimitTest(unittest.TestCase):
                     constructor_counts.append(mock_openai.call_count)
                     if number <= 5:
                         require(response.status_code == 200, f"요청 {number}: HTTP 200 조건")
-                        require(response.get_json(silent=True) == {"reply": MOCK_REPLY}, f"요청 {number}: Mock 답변 JSON 조건")
+                        require(response.get_json(silent=True) == {"reply": MOCK_REPLY, "correction": None}, f"요청 {number}: Mock 답변 JSON 조건")
                     else:
                         require(response.status_code == 429, "요청 6: HTTP 429 조건")
                         error = response.get_json(silent=True)

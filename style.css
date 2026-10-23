@@ -98,6 +98,14 @@ h1 > span { color: var(--accent); }
 .message-bubble { padding: 15px 18px; border: 1px solid #344039; border-radius: 0 13px 13px 13px; background: #222e28; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
 .message-bubble p + p { color: #c3cec3; }
 .chat-text { white-space: pre-wrap; }
+.correction-feedback { min-width: 0; margin-top: 8px; padding: 0 12px; border: 1px solid #344039; border-radius: 10px; background: var(--surface-soft); }
+.correction-summary { min-height: 44px; padding: 11px 0; color: var(--accent); font-size: 12px; line-height: 1.8; cursor: pointer; touch-action: manipulation; overflow-wrap: anywhere; }
+.correction-summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.correction-fields { margin: 0; padding: 0 0 4px; }
+.correction-fields dt { margin: 0 0 3px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.correction-fields dd { margin: 0 0 10px; color: var(--text); font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.correction-fields .correction-improved { color: var(--accent); }
+.correction-fields .correction-explanation { font-size: 12px; }
 .user-message { flex-direction: row-reverse; }
 .user-message .message-author { justify-content: flex-end; }
 .user-message .message-content { max-width: 88%; }

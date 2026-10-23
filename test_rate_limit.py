@@ -5,6 +5,7 @@
 """
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import secrets
@@ -104,7 +105,10 @@ class ChatRateLimitTest(unittest.TestCase):
             mock_client.responses = MagicMock(spec_set=["create"])
             mock_client.__enter__.return_value = mock_client
             mock_client.__exit__.return_value = False
-            mock_client.responses.create.return_value = SimpleNamespace(output_text=MOCK_REPLY)
+            mock_client.responses.create.return_value = SimpleNamespace(
+                status="completed", output=[],
+                output_text=json.dumps({"reply": MOCK_REPLY, "correction": None}),
+            )
             mock_openai = MagicMock(name="OpenAI", return_value=mock_client)
             stack.enter_context(patch.object(openai, "OpenAI", mock_openai))
 
@@ -153,7 +157,7 @@ class ChatRateLimitTest(unittest.TestCase):
                 with self.subTest(request=number):
                     if number <= 5:
                         self.assertEqual(response.status_code, 200)
-                        self.assertEqual(response.get_json(), {"reply": MOCK_REPLY})
+                        self.assertEqual(response.get_json(), {"reply": MOCK_REPLY, "correction": None})
                     else:
                         self.assertEqual(response.status_code, 429)
                         self.assertTrue(response.is_json)

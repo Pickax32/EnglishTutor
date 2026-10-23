@@ -16,6 +16,7 @@ const MAX_HISTORY_TURNS = 5;
 // 3분 × 분당 200단어 × 단어/공백 평균 7자(약 4,200자)에 여유를 둡니다.
 const MAX_USER_MESSAGE_LENGTH = 6000;
 const MAX_ASSISTANT_MESSAGE_LENGTH = 2000;
+const MAX_CORRECTION_EXPLANATION_LENGTH = 400;
 
 // 새로고침하면 초기화됩니다. 화면의 고정 인사말은 이력에 넣지 않습니다.
 // 성공한 user/assistant 대화 쌍만 순서대로 저장합니다.
@@ -91,7 +92,7 @@ function setLoading(isLoading) {
 }
 
 // 문장과 AI 답변은 HTML로 해석하지 않고 텍스트로만 표시합니다.
-function appendMessage(role, text) {
+function appendMessage(role, text, correction = null) {
   const message = document.createElement("div");
   message.className = role === "user" ? "user-message" : "ai-message";
 
@@ -123,11 +124,52 @@ function appendMessage(role, text) {
     // API 전송 함수는 유지하고, 그 요청이 방금 표시한 답변의 읽기 항목만 연결합니다.
     const ownerJob = activeChatRequest?.ownerJob;
     if (ownerJob && autoSttJob === ownerJob) ownerJob.answerEntry = speechEntries.get(content);
+    // 읽기용 text에는 교정 내용을 합치지 않습니다.
+    appendExpressionCorrection(content, correction);
   }
   message.append(content);
   chatMessages.append(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
   return message;
+}
+
+function normalizeExpressionCorrection(value, sourceText) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof sourceText !== "string") return null;
+  const limits = { original: MAX_USER_MESSAGE_LENGTH, improved: MAX_USER_MESSAGE_LENGTH, explanation: MAX_CORRECTION_EXPLANATION_LENGTH };
+  const correction = {};
+  for (const [field, limit] of Object.entries(limits)) {
+    if (typeof value[field] !== "string") return null;
+    const text = value[field].trim();
+    if (!text || Array.from(text).length > limit) return null;
+    correction[field] = text;
+  }
+  if (!sourceText.includes(correction.original) || correction.original === correction.improved
+      || !/[가-힣]/.test(correction.explanation)) return null;
+  return correction;
+}
+
+function appendExpressionCorrection(content, correction) {
+  if (!correction) return;
+  const feedback = document.createElement("details");
+  feedback.className = "correction-feedback";
+  const summary = document.createElement("summary");
+  summary.className = "correction-summary";
+  summary.textContent = "영어 표현 교정";
+  const fields = document.createElement("dl");
+  fields.className = "correction-fields";
+  for (const [field, label, language] of [["original", "원래 문장", "en"], ["improved", "개선 문장", "en"], ["explanation", "설명", "ko"]]) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.className = `correction-${field}`;
+    description.lang = language;
+    description.dir = "auto";
+    description.textContent = correction[field];
+    fields.append(term, description);
+  }
+  feedback.append(summary, fields);
+  // open을 지정하지 않아 사용자가 펼치기 전에는 설명을 접어 둡니다.
+  content.append(feedback);
 }
 
 messageInput.addEventListener("input", () => {
@@ -1067,7 +1109,8 @@ async function sendChatMessage(text, ownerJob = null) {
       completedHistory.splice(0, 2);
     }
 
-    appendMessage("assistant", reply);
+    const correction = normalizeExpressionCorrection(data.correction, message);
+    appendMessage("assistant", reply, correction);
     conversationHistory = completedHistory;
     lastSuccessfulTopic = requestSettings.topic;
     if (!ownerJob) messageInput.value = "";

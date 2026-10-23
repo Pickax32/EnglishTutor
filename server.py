@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 from pathlib import Path
@@ -145,7 +146,13 @@ def chat_account_key():
 CHAT_INSTRUCTIONS = (
     "You are a friendly English conversation partner. "
     "Reply naturally in English in 1-2 short sentences, including exactly one follow-up question. "
-    "Only correct grammar if the user explicitly asks for a correction."
+    "Keep the English reply focused on the conversation; put any correction only in the separate correction field. "
+    "Offer at most one meaningful grammar or expression correction from the latest user message only. "
+    "Use a short exact substring of that message as original, an improved English expression, "
+    "and a brief Korean explanation of at most 400 characters. "
+    "Use correction=null if there is no clear meaningful error, if the wording is already natural, "
+    "or if the transcription is uncertain. Do not invent errors or force stylistic rewrites. "
+    "Do not assess pronunciation from text. Never correct an earlier user or assistant message."
 )
 # 브라우저는 선택값만 보냅니다. AI 지시는 검증된 선택에 대응하는 서버 문구로만 만듭니다.
 DIFFICULTY_INSTRUCTIONS = {
@@ -184,6 +191,37 @@ MAX_HISTORY_TURNS = 5
 MAX_REQUEST_MESSAGES = MAX_HISTORY_TURNS * 2 + 1
 MAX_USER_MESSAGE_CHARS = 6000
 MAX_ASSISTANT_MESSAGE_CHARS = 2000
+MAX_CORRECTION_EXPLANATION_CHARS = 400
+# 최대 필드 길이와 JSON의 유니코드 이스케이프를 수용하되 무제한 출력 파싱은 막습니다.
+MAX_CHAT_OUTPUT_CHARS = 192 * 1024
+CHAT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "name": "english_conversation",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "reply": {"type": "string"},
+            "correction": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "original": {"type": "string"},
+                            "improved": {"type": "string"},
+                            "explanation": {"type": "string"},
+                        },
+                        "required": ["original", "improved", "explanation"],
+                        "additionalProperties": False,
+                    },
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": ["reply", "correction"],
+        "additionalProperties": False,
+    },
+}
 
 
 def chat_instructions_for_request(data):
@@ -214,6 +252,61 @@ def chat_instructions_for_request(data):
         if topic == "free":
             fragments.append(FREE_TOPIC_RETURN_INSTRUCTIONS)
     return " ".join(fragments)
+
+
+def validated_correction(value, latest_user_message):
+    fields = {"original", "improved", "explanation"}
+    if not isinstance(value, dict) or not fields.issubset(value):
+        return None
+    if any(not isinstance(value[field], str) or not value[field].strip() for field in fields):
+        return None
+    original = value["original"].strip()
+    improved = value["improved"].strip()
+    explanation = value["explanation"].strip()
+    if (
+        len(original) > MAX_USER_MESSAGE_CHARS
+        or len(improved) > MAX_USER_MESSAGE_CHARS
+        or len(explanation) > MAX_CORRECTION_EXPLANATION_CHARS
+        or original not in latest_user_message
+        or original == improved
+        or not any("\uac00" <= char <= "\ud7a3" for char in explanation)
+    ):
+        return None
+    return {"original": original, "improved": improved, "explanation": explanation}
+
+
+def reject_non_json_constant(_value):
+    # 표준 JSON이 아닌 NaN/Infinity도 일반 JSON 파싱 오류와 동일하게 거부합니다.
+    raise ValueError
+
+
+def parsed_chat_response(response, latest_user_message):
+    if (
+        getattr(response, "status", None) != "completed"
+        or getattr(response, "incomplete_details", None) is not None
+        or getattr(response, "error", None) is not None
+    ):
+        raise ValueError
+    for item in getattr(response, "output", []) or []:
+        content = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        for part in content or []:
+            kind = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+            if kind == "refusal":
+                raise ValueError
+    raw = response.output_text
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > MAX_CHAT_OUTPUT_CHARS:
+        raise ValueError
+    payload = json.loads(raw, parse_constant=reject_non_json_constant)
+    if not isinstance(payload, dict) or not isinstance(payload.get("reply"), str):
+        raise ValueError
+    reply = payload["reply"].strip()
+    if not reply or len(reply) > MAX_ASSISTANT_MESSAGE_CHARS:
+        raise ValueError
+    # 교정이 없거나 부정확해도 검증된 대화 답변은 유지합니다. 원본 JSON은 반환하지 않습니다.
+    return {
+        "reply": reply,
+        "correction": validated_correction(payload.get("correction"), latest_user_message),
+    }
 
 
 # STT는 텍스트 대화와 별도의 업로드·요청 한도를 사용합니다.
@@ -411,17 +504,16 @@ def chat():
                 model="gpt-5.4-mini",
                 instructions=instructions,
                 input=validated_messages,
+                text={"format": CHAT_RESPONSE_FORMAT},
                 store=False,
             )
-        reply = response.output_text.strip()
-        if not reply or len(reply) > MAX_ASSISTANT_MESSAGE_CHARS:
-            return jsonify({"error": CHAT_ERROR}), 502
+        result = parsed_chat_response(response, validated_messages[-1]["content"])
     except Exception:
         # 예외 내용에는 키나 내부 정보가 포함될 수 있어 응답에 넣지 않습니다.
         app.logger.warning("Chat request failed.")
         return jsonify({"error": CHAT_ERROR}), 502
 
-    return jsonify({"reply": reply})
+    return jsonify(result)
 
 
 @app.post("/api/transcribe")

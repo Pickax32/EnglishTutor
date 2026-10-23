@@ -13,6 +13,7 @@ Windows 시스템 환경변수는 clear=False로 보존합니다.
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
 import io
+import json
 import logging
 import os
 from pathlib import Path
@@ -141,7 +142,10 @@ class RedisFailureTest(unittest.TestCase):
             mock_client.responses = MagicMock(spec_set=["create"])
             mock_client.__enter__.return_value = mock_client
             mock_client.__exit__.return_value = False
-            mock_client.responses.create.return_value = SimpleNamespace(output_text=MOCK_REPLY)
+            mock_client.responses.create.return_value = SimpleNamespace(
+                status="completed", output=[],
+                output_text=json.dumps({"reply": MOCK_REPLY, "correction": None}),
+            )
             mock_openai = MagicMock(name="OpenAI", return_value=mock_client)
             stack.enter_context(patch.object(openai, "OpenAI", mock_openai))
 
