@@ -165,6 +165,25 @@ h1 > span { color: var(--accent); }
 .connection-notice:not(:empty) { margin-top: 14px; padding: 12px; border: 1px solid #485d3e; border-radius: 9px; background: #243321; }
 .connection-notice.is-error { border-color: #79574b; background: #362b24; color: #f1c3a8; }
 
+.learning-records { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 11px; }
+.learning-records > summary { min-height: 36px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.learning-help, .learning-status { color: var(--muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.learning-status:not(:empty) { margin-top: 12px; }
+.learning-status.is-error { color: #f1c3a8; }
+.learning-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.learning-actions button, .learning-history-list button { min-height: 40px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.learning-actions button:disabled, .learning-history-list button:disabled { opacity: .5; cursor: default; }
+.learning-actions button:focus-visible, .learning-history-list button:focus-visible, .learning-records summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.learning-history-list { display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.learning-history-list button { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.learning-history-detail, .learning-feedback { font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.learning-history-detail:not(:empty) { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.learning-history-turn { margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; }
+.learning-feedback h3, .learning-history-detail h3 { margin: 10px 0 6px; font-size: 13px; color: var(--accent); }
+.learning-feedback ul, .learning-history-detail ul { padding-left: 20px; }
+.learning-feedback li, .learning-history-detail li { margin: 7px 0; white-space: pre-wrap; }
+.learning-save-actions:empty { display: none; }
+
 .practice-guide { display: flex; flex-direction: column; padding: 27px 2px 12px 0; }
 .guide-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .guide-number { color: var(--accent); font-size: 12px; }

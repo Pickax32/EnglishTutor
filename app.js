@@ -12,14 +12,24 @@ window.addEventListener("pageshow", (event) => {
 
 let inFlight = false;
 let activeChatRequest = null;
+let latestChatRequest = null;
 const MAX_HISTORY_TURNS = 5;
 // 3분 × 분당 200단어 × 단어/공백 평균 7자(약 4,200자)에 여유를 둡니다.
 const MAX_USER_MESSAGE_LENGTH = 6000;
 const MAX_ASSISTANT_MESSAGE_LENGTH = 2000;
 const MAX_CORRECTION_EXPLANATION_LENGTH = 400;
+const CURRENT_LEARNING_KEY = "englishtutor.currentLearning";
+let currentLearning = null;
+let unsavedLearningTurn = null;
+let learningActionBusy = false;
+let learningViewGeneration = 0;
+let learningPageActive = true;
+let pendingLearningCreationId = null;
+const activeLearningRequests = new Set();
+const LEARNING_REQUEST_TIMEOUT_MS = 45000;
 
-// 새로고침하면 초기화됩니다. 화면의 고정 인사말은 이력에 넣지 않습니다.
-// 성공한 user/assistant 대화 쌍만 순서대로 저장합니다.
+// 서버에 확정 저장된 학습은 새로고침 후 복원합니다. 고정 인사말은 맥락에 넣지 않습니다.
+// 성공한 user/assistant 쌍만 최근 5회까지 대화 맥락으로 사용합니다.
 let conversationHistory = [];
 
 const englishLevelSelect = document.querySelector("#english-level");
@@ -48,7 +58,7 @@ function loadLearningSettings() {
 }
 
 let learningSettings = loadLearningSettings();
-// 대화와 함께 메모리에만 보관합니다. 실패·취소한 요청은 주제 전환 기준이 되지 않습니다.
+// 성공한 대화의 주제를 복원하며, 실패·취소한 요청은 주제 전환 기준이 되지 않습니다.
 let lastSuccessfulTopic = null;
 
 function reflectLearningSettings() {
@@ -81,11 +91,11 @@ function showNotice(message, isError = false) {
 
 function updateSendButton() {
   const message = messageInput.value.trim();
-  sendButton.disabled = inFlight || activeRecording !== null || autoSttJob !== null || message.length === 0;
+  sendButton.disabled = inFlight || activeRecording !== null || autoSttJob !== null || learningBlocked() || message.length === 0;
 }
 
 function setLoading(isLoading) {
-  messageInput.disabled = isLoading || activeRecording !== null || autoSttJob !== null;
+  messageInput.disabled = isLoading || activeRecording !== null || autoSttJob !== null || learningBlocked();
   chatForm.setAttribute("aria-busy", String(isLoading));
   sendButton.textContent = isLoading ? "Loading..." : "Send";
   updateSendButton();
@@ -242,14 +252,16 @@ function updateRecordingControls() {
   recordToggleLabel.textContent = labels[phase];
   recordToggleButton.setAttribute("aria-label", labels[phase]);
   recordToggleButton.disabled = ["requesting", "stopping", "preparing", "transcribing", "chatting"].includes(phase);
+  if (learningBlocked()) recordToggleButton.disabled = true;
   recordToggleButton.setAttribute("data-state", phase);
   recordToggleButton.setAttribute("aria-pressed", String(phase === "recording"));
   recordToggleButton.setAttribute("aria-busy", String(!["idle", "recording", "speaking"].includes(phase)));
-  const canCancel = Boolean(activeRecording || autoSttJob || transcriptionRequest || activeSpeech || inFlight);
+  const canCancel = Boolean(activeRecording || autoSttJob || transcriptionRequest || activeSpeech || inFlight || learningActionBusy);
   cancelAutoSttButton.hidden = !canCancel;
   cancelAutoSttButton.disabled = !canCancel;
   setLoading(inFlight);
   updateSpeechButtons();
+  updateLearningControls();
 }
 
 function releaseRecordingTracks(session) {
@@ -384,7 +396,7 @@ function stopLocalRecording(reason = "manual") {
 
 // 시작 준비를 기다린 뒤, 반환된 completion으로 별도로 녹음 완료를 기다릴 수 있습니다.
 async function startLocalRecording() {
-  if (activeRecording || autoSttJob || inFlight) return { ok: false, completion: null, error: "busy" };
+  if (activeRecording || autoSttJob || inFlight || learningBlocked()) return { ok: false, completion: null, error: "busy" };
   if (window.isSecureContext === false) {
     showRecordingStatus("녹음에는 HTTPS 연결이 필요합니다. HTTPS 주소로 접속해 주세요.", true);
     return { ok: false, completion: null, error: "insecure_context" };
@@ -460,6 +472,7 @@ function toggleLocalRecording() {
     return;
   }
   if (autoSttJob && autoSttJob.phase !== "speaking") return;
+  if (learningBlocked()) return;
   if (messageInput.value.length > 0) {
     showAutoSttStatus("작성 중인 문장을 보내거나 비운 뒤 마이크를 눌러 주세요.", true);
     return;
@@ -503,7 +516,8 @@ function cancelAutomaticChat(job = null) {
   // 먼저 요청을 무효화해 abort를 무시한 응답이나 이전 finally도 새 요청을 건드리지 못합니다.
   activeChatRequest = null;
   inFlight = false;
-  request.userMessage?.remove();
+  if (!request.answerDisplayed) request.userMessage?.remove();
+  cancelPendingLearningTurn(request);
   try { request.controller?.abort(); } catch { /* 취소 실패 시에도 응답은 무효입니다. */ }
   updateRecordingControls();
   showNotice("");
@@ -994,7 +1008,7 @@ async function transcribeLocalRecording(ownerJob = null) {
 }
 
 recordToggleButton.addEventListener("click", toggleLocalRecording);
-cancelAutoSttButton.addEventListener("click", () => clearLocalRecording());
+cancelAutoSttButton.addEventListener("click", () => { clearLocalRecording(); cancelLearningAction(); });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && (activeRecording || recordedBlob || autoSttJob || activeSpeech || inFlight)) {
     clearLocalRecording("화면이 숨겨져 대화를 중단했어요.");
@@ -1014,6 +1028,7 @@ updateRecordingControls();
  */
 async function sendChatMessage(text, ownerJob = null) {
   if (ownerJob && !isCurrentAutomaticStt(ownerJob)) return { ok: false, reply: null, error: "cancelled" };
+  if (learningBlocked()) return { ok: false, reply: null, error: "learning_unavailable" };
   if (autoSttJob && autoSttJob !== ownerJob) return { ok: false, reply: null, error: "busy" };
   if (inFlight) return { ok: false, reply: null, error: "busy" };
   if (ownerJob && messageInput.value.length > 0) return { ok: false, reply: null, error: "draft_present" };
@@ -1039,8 +1054,10 @@ async function sendChatMessage(text, ownerJob = null) {
   // 진행 중에 선택을 바꿔도 이 요청은 시작 시점의 설정을 끝까지 사용합니다.
   const requestSettings = { ...learningSettings };
   const previousTopic = lastSuccessfulTopic;
-  const request = { ownerJob, controller: null, userMessage: null };
+  const request = { ownerJob, controller: null, userMessage: null, learningId: null, turnId: null,
+    answerDisplayed: false, committing: false, cancelSent: false };
   activeChatRequest = request;
+  latestChatRequest = request;
   inFlight = true;
   updateRecordingControls();
   showNotice("Loading... AI가 답변을 준비하고 있어요.");
@@ -1054,6 +1071,17 @@ async function sendChatMessage(text, ownerJob = null) {
   ];
 
   try {
+    request.turnId = newLearningIdentifier();
+    const session = currentLearning || await createLearningSession();
+    request.learningId = session.id;
+    if (!isCurrent()) {
+      cancelPendingLearningTurn(request);
+      userMessage.remove();
+      return { ok: false, reply: null, error: "cancelled" };
+    }
+    if (session.status !== "active") throw new Error("Finished learning");
+    currentLearning = session;
+    rememberCurrentLearning(session.id);
     if (typeof AbortController === "function") request.controller = new AbortController();
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -1063,7 +1091,8 @@ async function sendChatMessage(text, ownerJob = null) {
         "Accept": "application/json",
         "X-CSRF-Token": csrfToken,
       },
-      body: JSON.stringify({ messages: candidateMessages, settings: requestSettings, previous_topic: previousTopic }),
+      body: JSON.stringify({ messages: candidateMessages, settings: requestSettings, previous_topic: previousTopic,
+        learning_id: request.learningId, turn_id: request.turnId }),
       ...(request.controller ? { signal: request.controller.signal } : {}),
     });
     if (!isCurrent()) {
@@ -1086,7 +1115,14 @@ async function sendChatMessage(text, ownerJob = null) {
       return { ok: false, reply: null, error: "rate_limited" };
     }
 
-    if (!response.ok) throw new Error("Chat request failed");
+    if (!response.ok) {
+      let failure = null;
+      try { failure = await response.json(); } catch { /* 서버의 원본 오류는 표시하지 않습니다. */ }
+      if (!isCurrent()) return { ok: false, reply: null, error: "cancelled" };
+      request.failureReported = true;
+      if ([409, 413, 503].includes(response.status)) showLearningStatus(safeLearningError(failure?.code, response.status), true);
+      throw new Error("Chat request failed");
+    }
     const data = await response.json();
     if (!isCurrent()) {
       userMessage.remove();
@@ -1111,18 +1147,35 @@ async function sendChatMessage(text, ownerJob = null) {
 
     const correction = normalizeExpressionCorrection(data.correction, message);
     appendMessage("assistant", reply, correction);
+    request.answerDisplayed = true;
     conversationHistory = completedHistory;
     lastSuccessfulTopic = requestSettings.topic;
     if (!ownerJob) messageInput.value = "";
     showNotice(ownerJob ? "" : "답변이 도착했어요.");
+    // 유료 채팅은 다시 호출하지 않습니다. 저장 확인에 실패하면 저장만 재시도합니다.
+    const pending = { learningId: session.id, turnId: request.turnId, request, uncertain: false };
+    unsavedLearningTurn = pending;
+    showLearningStatus("대화 기록을 저장하는 중...");
+    updateLearningControls();
+    if (!data.learning || data.learning.id !== session.id || data.learning.turn_id !== request.turnId) {
+      showLearningStatus("답변은 받았지만 저장 상태를 확인하지 못했어요. 기록 저장만 다시 시도해 주세요.", true);
+    } else if (data.learning.state === "save_failed") {
+      showLearningStatus("답변은 화면에 유지되지만 서버 저장에 실패했어요. 저장 상태를 확인하고 복구되지 않으면 문장을 따로 보관해 주세요. AI 요청은 다시 보내지 않아요.", true);
+    } else {
+      await commitLearningTurn(pending);
+    }
+    if (!isCurrent()) return { ok: false, reply: null, error: "cancelled" };
     return { ok: true, reply, error: null };
-  } catch {
+  } catch (error) {
     if (!isCurrent()) {
-      userMessage.remove();
+      if (!request.answerDisplayed) userMessage.remove();
       return { ok: false, reply: null, error: "cancelled" };
     }
     // 이력은 바꾸지 않습니다. 실패한 문장은 입력창에 남겨 다시 보낼 수 있습니다.
     userMessage.remove();
+    cancelPendingLearningTurn(request);
+    if (!request.learningId) showLearningStatus(error?.status ? safeLearningError(error.data?.code, error.status)
+      : "학습 기록을 준비하지 못해 AI 요청을 보내지 않았어요. 저장 연결 상태를 확인해 주세요.", true);
     showNotice("답변을 받지 못했어요. 잠시 후 Send를 눌러 다시 시도해 주세요.", true);
     return { ok: false, reply: null, error: "request_failed" };
   } finally {
@@ -1134,6 +1187,473 @@ async function sendChatMessage(text, ownerJob = null) {
     }
   }
 }
+
+function learningElement(id) { return document.querySelector(`#${id}`); }
+
+function learningBlocked() {
+  return learningActionBusy || unsavedLearningTurn !== null || currentLearning?.status === "finished";
+}
+
+function learningCoreBusy() {
+  return Boolean(activeRecording || autoSttJob || inFlight || transcriptionRequest);
+}
+
+function showLearningStatus(message, isError = false) {
+  const element = learningElement("learning-status");
+  if (!element) return;
+  element.textContent = message;
+  element.classList.toggle("is-error", isError);
+}
+
+function updateLearningControls() {
+  const busy = learningActionBusy || learningCoreBusy();
+  const finish = learningElement("finish-learning");
+  if (finish) finish.disabled = busy || Boolean(unsavedLearningTurn) || !currentLearning?.turns?.length
+    || currentLearning.status === "finished" || currentLearning.feedback_status === "generating";
+  const next = learningElement("start-new-learning");
+  if (next) next.disabled = busy || Boolean(unsavedLearningTurn)
+    || Boolean(currentLearning?.turns?.length && currentLearning.status !== "finished"
+      && !["generating", "failed"].includes(currentLearning.feedback_status));
+  for (const id of ["refresh-learning-history", "export-learning-history"]) {
+    const element = learningElement(id);
+    if (element) element.disabled = busy;
+  }
+  for (const id of ["retry-learning-save", "discard-learning-save"]) {
+    const element = learningElement(id);
+    if (element) { element.hidden = !unsavedLearningTurn; element.disabled = busy; }
+  }
+}
+
+function rememberCurrentLearning(id) {
+  try {
+    if (id) window.localStorage.setItem(CURRENT_LEARNING_KEY, id);
+    else window.localStorage.removeItem(CURRENT_LEARNING_KEY);
+  } catch {
+    // 원문은 브라우저 저장소에 쓰지 않으며, 저장 제한이 있어도 서버 기록은 남습니다.
+  }
+}
+
+function validLearningIdentifier(id) { return typeof id === "string" && /^[a-f0-9]{32}$/.test(id); }
+
+function newLearningIdentifier() {
+  if (typeof window.crypto?.randomUUID === "function") return window.crypto.randomUUID().replace(/-/g, "");
+  if (typeof window.crypto?.getRandomValues !== "function") throw new Error("Secure identifier unavailable");
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function safeLearningError(code, status) {
+  if (status === 401) return "로그인이 만료되었어요. 다시 로그인해 주세요.";
+  if (status === 403) return "보안 확인에 실패했어요. 페이지를 새로고침해 주세요.";
+  if (status === 429) return "요청 횟수 제한에 도달했어요. 잠시 후 다시 시도해 주세요.";
+  if (code === "LIMIT_REACHED" || status === 413) return "학습 기록의 저장 용량 또는 기록 수 한도에 도달했어요. 기록을 내보내고 불필요한 학습을 직접 삭제해 주세요.";
+  if (status === 404) return "학습 기록을 찾을 수 없어요. 다른 기기에서 삭제했는지 확인해 주세요.";
+  if (status === 409) return "다른 요청이 처리 중이거나 이미 마무리된 학습이에요. 기록을 다시 확인해 주세요.";
+  return "학습 기록을 처리하지 못했어요. 연결 상태를 확인해 주세요. 유료 AI 요청은 자동으로 다시 보내지 않아요.";
+}
+
+async function learningRequest(path, method = "GET", body = null, cleanup = false) {
+  const request = { controller: typeof AbortController === "function" ? new AbortController() : null, reject: null, timer: null, cleanup };
+  const interrupted = new Promise((resolve, reject) => {
+    request.reject = reject;
+    request.timer = setTimeout(() => {
+      try { request.controller?.abort(); } catch { /* 취소 실패 시에도 지연 응답은 무시합니다. */ }
+      reject(new Error(safeLearningError(null, 503)));
+    }, LEARNING_REQUEST_TIMEOUT_MS);
+  });
+  activeLearningRequests.add(request);
+  const work = (async () => {
+    const response = await fetch(path, {
+      method, credentials: "same-origin",
+      headers: { "Accept": "application/json", ...(method !== "GET" ? { "Content-Type": "application/json", "X-CSRF-Token": csrfToken } : {}) },
+      ...(method !== "GET" ? { body: JSON.stringify(body || {}) } : {}),
+      ...(cleanup ? { keepalive: true } : {}),
+      ...(request.controller ? { signal: request.controller.signal } : {}),
+    });
+    let data;
+    try { data = await response.json(); } catch { throw new Error(safeLearningError(null, response.status)); }
+    if (!response.ok) {
+      const error = new Error(safeLearningError(data?.code, response.status));
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+    return { data, status: response.status };
+  })();
+  try { return await Promise.race([work, interrupted]); }
+  finally { clearTimeout(request.timer); activeLearningRequests.delete(request); }
+}
+
+function cancelLearningAction() {
+  const wasBusy = learningActionBusy || activeLearningRequests.size > 0;
+  ++learningViewGeneration;
+  learningActionBusy = false;
+  for (const request of activeLearningRequests) {
+    if (request.cleanup) continue;
+    try { request.controller?.abort(); } catch { /* 응답 무효화도 함께 적용합니다. */ }
+    request.reject?.(new Error("Learning action cancelled"));
+  }
+  if (wasBusy && learningPageActive) showLearningStatus("화면 처리를 중단했어요. 서버에서 이미 저장·마무리되었을 수 있으니 지난 학습 기록을 확인해 주세요.", true);
+  updateRecordingControls();
+}
+
+function boundedLearningText(value, max) {
+  return typeof value === "string" && value.trim() && Array.from(value).length <= max ? value.trim() : null;
+}
+
+function normalizedLearningFeedback(value, turns) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!["corrections", "expressions", "vocabulary"].every((key) => Array.isArray(value[key]) && value[key].length <= 3)) return null;
+  const result = { corrections: [], expressions: [], vocabulary: [] };
+  const source = turns.map((turn) => turn.user).join("\n");
+  for (const item of value.corrections) {
+    const correction = normalizeExpressionCorrection(item, source);
+    if (!correction) return null;
+    result.corrections.push(correction);
+  }
+  for (const field of ["expressions", "vocabulary"]) for (const item of value[field]) {
+    const expression = boundedLearningText(item?.expression, 240);
+    const explanation = boundedLearningText(item?.explanation, 400);
+    if (!expression || !explanation) return null;
+    result[field].push({ expression, explanation });
+  }
+  return result;
+}
+
+function normalizedLearningSession(value) {
+  if (!value || typeof value !== "object" || !validLearningIdentifier(value.id)
+      || !["active", "finished"].includes(value.status) || !Array.isArray(value.turns) || value.turns.length > 100) return null;
+  const turns = [];
+  for (const item of value.turns) {
+    const user = boundedLearningText(item?.user, MAX_USER_MESSAGE_LENGTH);
+    const reply = boundedLearningText(item?.reply, MAX_ASSISTANT_MESSAGE_LENGTH);
+    if (!user || !reply || !validLearningIdentifier(item.turn_id || item.id)) return null;
+    turns.push({ turn_id: item.turn_id || item.id, user, reply,
+      correction: normalizeExpressionCorrection(item.correction, user), settings: normalizeLearningSettings(item.settings),
+      created_at: boundedLearningText(item.created_at, 80) || "" });
+  }
+  const session = { id: value.id, status: value.status, turns,
+    title: boundedLearningText(value.title, 120) || "영어 학습",
+    created_at: boundedLearningText(value.created_at, 80) || "", updated_at: boundedLearningText(value.updated_at, 80) || "",
+    feedback_status: ["none", "generating", "complete", "failed"].includes(value.feedback_status) ? value.feedback_status : "none",
+    pending_turn_id: validLearningIdentifier(value.pending_turn_id) ? value.pending_turn_id : null,
+    pending_state: ["running", "ready"].includes(value.pending_state) ? value.pending_state : null };
+  session.feedback = normalizedLearningFeedback(value.feedback, turns);
+  return session;
+}
+
+async function createLearningSession() {
+  try {
+    pendingLearningCreationId ||= newLearningIdentifier();
+    const { data } = await learningRequest("/api/learning", "POST", { request_id: pendingLearningCreationId });
+    const session = normalizedLearningSession(data?.session);
+    if (!session) throw new Error("Invalid learning response");
+    pendingLearningCreationId = null;
+    return session;
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function commitLearningTurn(pending) {
+  const generation = learningViewGeneration;
+  pending.request && (pending.request.committing = true);
+  try {
+    const { data } = await learningRequest(`/api/learning/${pending.learningId}/turns/${pending.turnId}/commit`, "POST");
+    const session = normalizedLearningSession(data?.session);
+    if (!data?.saved || !session || session.id !== pending.learningId
+        || !session.turns.some((turn) => turn.turn_id === pending.turnId)) throw new Error("Save not confirmed");
+    if (unsavedLearningTurn === pending && learningPageActive && generation === learningViewGeneration) {
+      currentLearning = session;
+      unsavedLearningTurn = null;
+      showLearningStatus("대화 기록을 저장했어요.");
+    }
+    return true;
+  } catch {
+    if (unsavedLearningTurn === pending && learningPageActive && generation === learningViewGeneration) {
+      showLearningStatus("답변은 유지했지만 기록 저장을 확인하지 못했어요. 저장만 다시 시도하거나 기록 상태를 확인해 주세요.", true);
+    }
+    return false;
+  } finally {
+    if (pending.request) pending.request.committing = false;
+    updateRecordingControls();
+  }
+}
+
+function cancelPendingLearningTurn(request) {
+  if (!validLearningIdentifier(request?.learningId) || !validLearningIdentifier(request?.turnId) || request.cancelSent) return;
+  request.cancelSent = true;
+  const generation = learningViewGeneration;
+  const isCurrent = () => learningPageActive && latestChatRequest === request && generation === learningViewGeneration;
+  if (request.committing || request.answerDisplayed) {
+    if (unsavedLearningTurn) unsavedLearningTurn.uncertain = true;
+    showLearningStatus("답변을 받은 뒤 중단했어요. 저장 요청은 이미 완료되었을 수 있으니 기록을 확인해 주세요.", true);
+    return;
+  }
+  // 서버가 아직 생성 중이어도 같은 turn_id의 취소를 기록해 늦은 응답의 저장을 막습니다.
+  void learningRequest(`/api/learning/${request.learningId}/turns/${request.turnId}/cancel`, "POST", null, true)
+    .then(({ data }) => {
+      if (data?.state === "committed" && isCurrent()) showLearningStatus("이미 저장된 대화예요. 삭제하려면 지난 학습 기록에서 삭제해 주세요.");
+    }).catch(() => {
+      if (isCurrent() && !activeChatRequest && !request.failureReported) showLearningStatus("취소 상태를 확인하지 못했어요. 지난 학습 기록을 확인해 주세요.", true);
+    });
+}
+
+function renderLearningFeedback(target, session) {
+  target?.replaceChildren();
+  if (!target) return;
+  const feedback = session.feedback;
+  if (!feedback) {
+    if (session.feedback_status === "failed" || session.feedback_status === "generating") {
+      const note = document.createElement("p");
+      note.textContent = session.feedback_status === "failed" ? "복습 자료를 만들지 못했어요. 대화와 교정 기록은 그대로 보관돼요. 유료 요청은 다시 실행하지 않아요." : "복습 자료 생성이 진행 중이에요. 기록을 다시 불러와 확인해 주세요.";
+      target.append(note);
+    }
+    return;
+  }
+  for (const [field, title] of [["corrections", "중요한 영어 표현 교정"], ["expressions", "추천 영어 표현"], ["vocabulary", "복습할 단어·구문"]]) {
+    const heading = document.createElement("h3"); heading.textContent = title;
+    target.append(heading);
+    if (!feedback[field].length) { const note = document.createElement("p"); note.textContent = "추가 복습 항목이 없어요."; target.append(note); continue; }
+    const list = document.createElement("ul");
+    for (const item of feedback[field]) {
+      const row = document.createElement("li");
+      const english = document.createElement("p"); english.lang = "en";
+      english.textContent = field === "corrections" ? `${item.original} → ${item.improved}` : item.expression;
+      const explanation = document.createElement("p"); explanation.lang = "ko"; explanation.textContent = item.explanation;
+      row.append(english, explanation); list.append(row);
+    }
+    target.append(list);
+  }
+}
+
+async function learningAction(action, allowUnsaved = false) {
+  if (learningActionBusy || learningCoreBusy() || (unsavedLearningTurn && !allowUnsaved)) return;
+  learningActionBusy = true;
+  const generation = ++learningViewGeneration;
+  updateRecordingControls();
+  try { await action(() => learningPageActive && generation === learningViewGeneration); }
+  catch (error) {
+    if (learningPageActive && generation === learningViewGeneration) showLearningStatus(error?.status
+      ? safeLearningError(error.data?.code, error.status) : safeLearningError(null, 503), true);
+  } finally {
+    if (generation === learningViewGeneration) { learningActionBusy = false; updateRecordingControls(); }
+  }
+}
+
+async function finishCurrentLearning() {
+  if (!currentLearning?.turns.length || currentLearning.status === "finished"
+      || ["generating", "failed"].includes(currentLearning.feedback_status)) return;
+  await learningAction(async (isCurrent) => {
+    const id = currentLearning.id;
+    currentLearning.feedback_status = "generating";
+    showLearningStatus("복습 자료를 만들고 있어요...");
+    let result;
+    try { result = await learningRequest(`/api/learning/${id}/finish`, "POST"); }
+    catch (error) {
+      if (isCurrent()) {
+        const saved = normalizedLearningSession(error?.data?.session);
+        if (saved?.id === id) currentLearning = saved;
+        else currentLearning.feedback_status = "failed";
+        renderLearningFeedback(learningElement("learning-feedback"), currentLearning);
+        showLearningStatus("복습 자료를 확인하지 못했어요. 대화 기록은 유지해요. 유료 요청을 다시 실행하지 말고 지난 학습 기록에서 확인해 주세요.", true);
+      }
+      return;
+    }
+    const { data, status } = result;
+    const session = normalizedLearningSession(data?.session);
+    if (!isCurrent()) return;
+    if (!session || session.id !== currentLearning.id) throw new Error("Invalid finish response");
+    currentLearning = session;
+    renderLearningFeedback(learningElement("learning-feedback"), session);
+    showLearningStatus(status === 202 ? "복습 자료 생성이 진행 중이에요. 유료 요청을 다시 보내지 말고 기록을 불러와 확인해 주세요." : "학습을 마무리했어요. 새 학습 시작을 누르면 새 대화로 시작해요.");
+  });
+}
+
+function startNewLearning() {
+  if (learningActionBusy || learningCoreBusy() || unsavedLearningTurn || (currentLearning?.turns.length && currentLearning.status !== "finished"
+      && !["generating", "failed"].includes(currentLearning.feedback_status))) return;
+  if (messageInput.value.length && !window.confirm("작성 중인 문장을 지우고 새 학습을 시작할까요?")) return;
+  ++learningViewGeneration;
+  stopAnswerSpeech();
+  currentLearning = null;
+  pendingLearningCreationId = null;
+  rememberCurrentLearning(null);
+  conversationHistory = [];
+  lastSuccessfulTopic = null;
+  messageInput.value = "";
+  chatMessages.replaceChildren();
+  learningElement("learning-feedback")?.replaceChildren();
+  showLearningStatus("새 학습을 준비했어요. 이전 기록은 그대로 보관돼요.");
+  showNotice("");
+  updateRecordingControls();
+}
+
+function renderStoredLearning(target, session) {
+  target.replaceChildren();
+  const heading = document.createElement("h3"); heading.textContent = `${session.title} · ${session.created_at}`; target.append(heading);
+  for (const turn of session.turns) {
+    const section = document.createElement("div"); section.className = "learning-history-turn";
+    for (const [label, text] of [["You", turn.user], ["AI", turn.reply]]) {
+      const paragraph = document.createElement("p"); paragraph.lang = "en"; paragraph.textContent = `${label}: ${text}`; section.append(paragraph);
+    }
+    const metadata = document.createElement("p");
+    metadata.textContent = `${{ beginner: "초급", intermediate: "중급", advanced: "고급" }[turn.settings.difficulty]} · ${{ free: "자유회화", daily: "일상생활", travel: "여행 영어", business: "비즈니스" }[turn.settings.topic]} · ${turn.created_at}`;
+    section.append(metadata);
+    appendExpressionCorrection(section, turn.correction);
+    target.append(section);
+  }
+  const feedback = document.createElement("div"); renderLearningFeedback(feedback, session); target.append(feedback);
+  const actions = document.createElement("div"); actions.className = "learning-actions";
+  const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "이 학습 삭제";
+  remove.addEventListener("click", () => deleteStoredLearning(session.id)); actions.append(remove); target.append(actions);
+}
+
+async function loadStoredLearning(id) {
+  if (!validLearningIdentifier(id)) return;
+  await learningAction(async (isCurrent) => {
+    const { data } = await learningRequest(`/api/learning/${id}`);
+    const session = normalizedLearningSession(data?.session);
+    if (!isCurrent()) return;
+    if (!session || session.id !== id) throw new Error("Invalid learning response");
+    renderStoredLearning(learningElement("learning-history-detail"), session);
+    showLearningStatus("학습 기록을 불러왔어요. 현재 대화는 그대로 유지해요.");
+  }, true);
+}
+
+async function loadLearningHistory() {
+  await learningAction(async (isCurrent) => {
+    const { data } = await learningRequest("/api/learning");
+    if (!isCurrent()) return;
+    if (!Array.isArray(data?.sessions) || data.sessions.length > 100) throw new Error("Invalid learning list");
+    const list = learningElement("learning-history-list"); list.replaceChildren();
+    for (const item of data.sessions) {
+      if (!validLearningIdentifier(item?.id) || !Number.isInteger(item.turn_count) || item.turn_count < 0 || item.turn_count > 100) throw new Error("Invalid learning summary");
+      const button = document.createElement("button"); button.type = "button";
+      button.textContent = `${boundedLearningText(item.title, 120) || "영어 학습"} · ${boundedLearningText(item.created_at, 80) || ""} · ${item.turn_count}회 대화`;
+      button.addEventListener("click", () => loadStoredLearning(item.id)); list.append(button);
+    }
+    showLearningStatus(data.sessions.length ? "확인할 학습 기록을 선택해 주세요." : "저장된 학습 기록이 없어요.");
+    // 서버가 공개하는 상한 숫자만 표시하며 접속 정보나 원문은 쓰지 않습니다.
+    const limits = data.limits;
+    if (limits && typeof limits === "object") {
+      const numbers = Object.entries(limits).filter(([key, value]) => /^[a-z_]+$/.test(key) && Number.isSafeInteger(value) && value > 0);
+      const label = learningElement("learning-storage-limits");
+      const known = { max_sessions: "학습 회차", max_turns_per_session: "회차당 대화", max_account_bytes: "전체 저장 바이트", max_session_bytes: "회차당 저장 바이트", max_attempts_per_session: "회차당 요청 시도" };
+      if (label) label.textContent = numbers.filter(([key]) => known[key]).map(([key, value]) => `${known[key]} 최대 ${value.toLocaleString()}`).join(" · ");
+    }
+  }, true);
+}
+
+async function deleteStoredLearning(id) {
+  if (!validLearningIdentifier(id) || !window.confirm("이 학습의 대화와 복습 자료를 영구 삭제할까요? 이 작업은 되돌릴 수 없어요.")) return;
+  await learningAction(async (isCurrent) => {
+    await learningRequest(`/api/learning/${id}`, "DELETE");
+    if (!isCurrent()) return;
+    if (currentLearning?.id === id) {
+      currentLearning = null; rememberCurrentLearning(null); conversationHistory = []; lastSuccessfulTopic = null;
+      stopAnswerSpeech(); chatMessages.replaceChildren(); learningElement("learning-feedback")?.replaceChildren();
+    }
+    learningElement("learning-history-detail")?.replaceChildren();
+    learningElement("learning-history-list")?.replaceChildren();
+    showLearningStatus("선택한 학습을 삭제했어요. 다른 학습과 요청 제한 기록은 유지돼요.");
+  });
+}
+
+async function exportLearningHistory() {
+  await learningAction(async (isCurrent) => {
+    const { data } = await learningRequest("/api/learning/export");
+    if (!isCurrent()) return;
+    if (!Array.isArray(data?.sessions) || data.sessions.length > 100
+        || data.sessions.some((session) => !normalizedLearningSession(session))) throw new Error("Invalid learning export");
+    const encoded = JSON.stringify(data, null, 2);
+    if (new Blob([encoded]).size > 9 * 1024 * 1024) throw new Error("Learning export too large");
+    // 서버 JSON을 파일로만 내보냅니다. DOM에 HTML로 해석하지 않습니다.
+    const blob = new Blob([encoded], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a"); link.href = url; link.download = "EnglishTutor-learning-history.json";
+    document.body.append(link);
+    try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    showLearningStatus("전체 기록 JSON을 내보냈어요. 파일에는 개인 학습 대화가 포함돼요.");
+  }, true);
+}
+
+async function retryLearningSave() {
+  if (!unsavedLearningTurn || learningActionBusy || learningCoreBusy()) return;
+  learningActionBusy = true; updateRecordingControls();
+  const pending = unsavedLearningTurn;
+  try { await commitLearningTurn(pending); }
+  finally { learningActionBusy = false; updateRecordingControls(); }
+}
+
+async function discardUnsavedLearningTurn() {
+  if (!unsavedLearningTurn || learningActionBusy || learningCoreBusy()
+      || !window.confirm("미저장 대화의 서버 상태를 확인하고, 아직 저장되지 않았다면 버릴까요? 이미 저장된 기록은 삭제하지 않아요.")) return;
+  const pending = unsavedLearningTurn;
+  learningActionBusy = true; updateRecordingControls();
+  try {
+    const { data } = await learningRequest(`/api/learning/${pending.learningId}/turns/${pending.turnId}/cancel`, "POST");
+    if (!learningPageActive || unsavedLearningTurn !== pending || !data?.cancelled) return;
+    if (data.state === "committed") {
+      await commitLearningTurn(pending);
+    } else if (data.state === "cancelled") {
+      unsavedLearningTurn = null;
+      // 서버의 확정 기록을 다시 복원해 버린 대화가 다음 맥락에 섞이지 않게 합니다.
+      await restoreCurrentLearning(pending.learningId, false);
+      showLearningStatus("미저장 대화를 버렸어요. 이미 저장된 기록은 유지해요.");
+    } else throw new Error("Invalid cancel response");
+  } catch {
+    showLearningStatus("저장 상태를 확인하지 못했어요. 유료 AI 요청 없이 기록 저장만 다시 시도할 수 있어요.", true);
+  } finally { learningActionBusy = false; updateRecordingControls(); }
+}
+
+async function restoreCurrentLearning(id, initial = true) {
+  const generation = ++learningViewGeneration;
+  learningActionBusy = true; updateRecordingControls();
+  try {
+    const { data } = await learningRequest(`/api/learning/${id}`);
+    const session = normalizedLearningSession(data?.session);
+    if (!learningPageActive || generation !== learningViewGeneration) return;
+    if (!session || session.id !== id) throw new Error("Invalid stored learning");
+    currentLearning = session; rememberCurrentLearning(id);
+    conversationHistory = session.turns.slice(-MAX_HISTORY_TURNS).flatMap((turn) => [{ role: "user", content: turn.user }, { role: "assistant", content: turn.reply }]);
+    lastSuccessfulTopic = session.turns.at(-1)?.settings.topic || null;
+    chatMessages.replaceChildren();
+    for (const turn of session.turns) { appendMessage("user", turn.user); appendMessage("assistant", turn.reply, turn.correction); }
+    renderLearningFeedback(learningElement("learning-feedback"), session);
+    if (session.pending_turn_id) {
+      unsavedLearningTurn = { learningId: id, turnId: session.pending_turn_id, request: null, uncertain: true };
+      showLearningStatus("이전 요청의 저장을 확인하지 못했어요. 저장만 다시 시도하거나 미저장 기록을 처리해 주세요.", true);
+    } else showLearningStatus(initial ? "저장된 학습을 복원했어요. 녹음 원본은 보관하지 않아요." : "저장된 대화를 다시 확인했어요.");
+  } catch (error) {
+    if (!learningPageActive || generation !== learningViewGeneration) return;
+    if (error?.status === 404) { currentLearning = null; rememberCurrentLearning(null); }
+    else {
+      // 실패한 복원을 빈 새 회차로 오인하지 않도록 사용자의 확인 전까지 막습니다.
+      currentLearning = { id, status: "finished", turns: [], feedback_status: "none" };
+    }
+    showLearningStatus(error?.status ? safeLearningError(error.data?.code, error.status) : safeLearningError(null, 503), true);
+  } finally {
+    if (generation === learningViewGeneration) { learningActionBusy = false; updateRecordingControls(); }
+  }
+}
+
+learningElement("finish-learning")?.addEventListener("click", finishCurrentLearning);
+learningElement("start-new-learning")?.addEventListener("click", startNewLearning);
+learningElement("refresh-learning-history")?.addEventListener("click", loadLearningHistory);
+learningElement("export-learning-history")?.addEventListener("click", exportLearningHistory);
+learningElement("retry-learning-save")?.addEventListener("click", retryLearningSave);
+learningElement("discard-learning-save")?.addEventListener("click", discardUnsavedLearningTurn);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") cancelLearningAction();
+});
+window.addEventListener("pagehide", () => { learningPageActive = false; cancelLearningAction(); });
+document.querySelector(".logout-form")?.addEventListener("submit", () => { learningPageActive = false; cancelLearningAction(); });
+let previousLearningId = null;
+try { previousLearningId = window.localStorage.getItem(CURRENT_LEARNING_KEY); } catch { /* 서버 기록 목록은 계속 사용 가능합니다. */ }
+if (validLearningIdentifier(previousLearningId)) void restoreCurrentLearning(previousLearningId);
+updateLearningControls();
 
 chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();

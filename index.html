@@ -122,6 +122,31 @@
                 </div>
                 <p class="learning-settings-status" id="learning-settings-status" role="status" aria-live="polite">다음 채팅부터 적용돼요. 대화 내용은 유지돼요.</p>
               </details>
+              <details class="learning-records" id="learning-finish">
+                <summary>학습 마무리</summary>
+                <p class="learning-help">이 회차의 대화로 복습 자료를 만들어요. 마무리할 때 AI 요청이 최대 한 번 추가되며, 같은 회차는 다시 과금 요청하지 않아요.</p>
+                <div class="learning-actions">
+                  <button id="finish-learning" type="button" disabled>학습 마무리</button>
+                  <button id="start-new-learning" type="button">새 학습 시작</button>
+                </div>
+                <div id="learning-feedback" class="learning-feedback"></div>
+              </details>
+              <details class="learning-records" id="learning-history">
+                <summary>지난 학습 기록</summary>
+                <p class="learning-help">로그인 계정의 대화와 교정·복습 자료를 저장해 다른 기기에서도 볼 수 있어요. 녹음 원본은 저장하지 않아요. 기록은 직접 삭제할 때까지 보관해요.</p>
+                <p class="learning-help" id="learning-storage-limits">최대 100회 학습 · 회차당 최대 100회 요청 시도(실패·취소 포함) · 대화 최대 100회 · 전체 8MiB. 한도에 도달하면 오류로 안내하며 자동 삭제하지 않아요.</p>
+                <div class="learning-actions">
+                  <button id="refresh-learning-history" type="button">기록 불러오기</button>
+                  <button id="export-learning-history" type="button">전체 JSON 내보내기</button>
+                </div>
+                <div id="learning-history-list" class="learning-history-list"></div>
+                <div id="learning-history-detail" class="learning-history-detail"></div>
+              </details>
+              <p id="learning-status" class="learning-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <div class="learning-actions learning-save-actions">
+                <button id="retry-learning-save" type="button" hidden disabled>기록 저장 확인·재시도</button>
+                <button id="discard-learning-save" type="button" hidden disabled>미저장 기록 처리</button>
+              </div>
               <details class="text-entry" id="text-entry">
                 <summary>텍스트로 입력</summary>
                 <form class="chat-form" id="chat-form">
